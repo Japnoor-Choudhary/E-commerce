@@ -2,7 +2,7 @@ from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Permission
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from .models import Role
+from .models import Role,Address
 from django.utils import timezone
 
 User = get_user_model()
@@ -31,6 +31,12 @@ class RoleSerializer(serializers.ModelSerializer):
         model = Role
         fields = ["id", "store", "store_name", "name", "permissions", "permission_ids"]
 
+class AddressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Address
+        fields = "__all__"
+        read_only_fields = ("id", "created_at", "updated_at")
+
 
 # ---------------- User ----------------
 class UserSerializer(serializers.ModelSerializer):
@@ -56,7 +62,9 @@ class UserSerializer(serializers.ModelSerializer):
 
 # ---------------- Register ----------------
 class RegisterSerializer(serializers.ModelSerializer):
-    confirm_password = serializers.CharField(write_only=True)
+    confirm_password = serializers.CharField(write_only=True, required=False)
+    is_customer = serializers.BooleanField(default=False)
+    is_guest_user = serializers.BooleanField(default=False)
 
     class Meta:
         model = User
@@ -68,18 +76,49 @@ class RegisterSerializer(serializers.ModelSerializer):
             "password",
             "confirm_password",
             "store",
+            "is_customer",
+            "is_guest_user",
         )
-        extra_kwargs = {"password": {"write_only": True}}
+        extra_kwargs = {"password": {"write_only": True, "required": False}}
 
     def validate(self, attrs):
-        if attrs["password"] != attrs["confirm_password"]:
+        is_customer = attrs.get("is_customer", False)
+        is_guest = attrs.get("is_guest_user", False)
+
+        # Customers must have password
+        if is_customer and not attrs.get("password"):
+            raise serializers.ValidationError("Password is required for customer registration")
+        
+        # Password confirmation check
+        if attrs.get("password") and attrs.get("password") != attrs.get("confirm_password"):
             raise serializers.ValidationError("Passwords do not match")
+
+        # Guest user must have at least email or number
+        if is_guest and not (attrs.get("email") or attrs.get("number")):
+            raise serializers.ValidationError("Email or phone number is required for guest users")
+
         return attrs
 
     def create(self, validated_data):
-        validated_data.pop("confirm_password")
-        password = validated_data.pop("password")
-        user = User.objects.create_user(password=password, **validated_data)
+        password = validated_data.pop("password", None)
+        validated_data.pop("confirm_password", None)
+        is_customer = validated_data.pop("is_customer", False)
+        is_guest = validated_data.pop("is_guest_user", False)
+
+        # Create user
+        user = User.objects.create_user(**validated_data)
+
+        if password:
+            user.set_password(password)
+            user.save()
+
+        # Assign default role for guest/customer
+        if is_guest or is_customer:
+            default_role = Role.objects.filter(name="Customer").first()
+            if default_role:
+                user.roles.add(default_role)
+                user.save()
+
         return user
 
 

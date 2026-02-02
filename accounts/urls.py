@@ -6,6 +6,8 @@ from .views import(
     RoleUpdateDeleteAPI,
     UserListAPI,
     CustomTokenObtainPairView,
+    AddressListCreateAPI,
+    AddressRetrieveUpdateDeleteAPI
     # ForgotPasswordAPI, 
     # ResetPasswordAPI,
 )
@@ -21,4 +23,7 @@ urlpatterns = [
     path("roles/<uuid:pk>/", RoleUpdateDeleteAPI.as_view()),
 
     path("users/", UserListAPI.as_view()),
+    
+    path("addresses/", AddressListCreateAPI.as_view()),
+    path("addresses/<uuid:pk>/", AddressRetrieveUpdateDeleteAPI.as_view()),
 ]

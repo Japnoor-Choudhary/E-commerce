@@ -1,12 +1,14 @@
 from rest_framework import generics
 from rest_framework.permissions import IsAuthenticated
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .models import Role, User
+from .permissions import IsCustomerOrGuest 
+from .models import Role, User,Address
 from .serializers import (
     RoleSerializer,
     UserSerializer,
     RegisterSerializer,
-    CustomTokenObtainPairSerializer
+    CustomTokenObtainPairSerializer,
+    AddressSerializer
 )
 from .permissions import IsAdmin
 
@@ -39,3 +41,21 @@ class UserListAPI(generics.ListAPIView):
 # ---------------- JWT Login ----------------
 class CustomTokenObtainPairView(TokenObtainPairView):
     serializer_class = CustomTokenObtainPairSerializer
+
+class AddressListCreateAPI(generics.ListCreateAPIView):
+    serializer_class = AddressSerializer
+    permission_classes = [IsAuthenticated, IsCustomerOrGuest]
+
+    def get_queryset(self):
+        return Address.objects.filter(user=self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
+
+
+class AddressRetrieveUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
+    serializer_class = AddressSerializer
+    permission_classes = [IsAuthenticated, IsCustomerOrGuest]
+
+    def get_queryset(self):
+        return Address.objects.filter(user=self.request.user)

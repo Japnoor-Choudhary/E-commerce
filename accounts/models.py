@@ -1,9 +1,6 @@
 from django.db import models
-
-# Create your models here.
-
 import uuid
-from django.db import models
+from organization.models import Store
 from django.utils import timezone
 from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin
 from django.contrib.auth.models import Permission
@@ -15,6 +12,11 @@ class Role(models.Model):
     Example: Product Manager, Catalog Editor, Support Staff
     """
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="roles"
+    )
     name = models.CharField(max_length=100, unique=True)
     permissions = models.ManyToManyField(Permission, blank=True)
 
@@ -29,7 +31,13 @@ class User(AbstractBaseUser, PermissionsMixin):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
     email = models.EmailField(unique=True)
-
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="users"
+    )
     number = models.CharField(
         max_length=15,
         unique=True,

@@ -7,39 +7,49 @@ from .serializers import *
 from .permissions import HasModelPermission
 
 class ProductCRUDAPI(generics.ListCreateAPIView):
-    queryset = Product.objects.all()
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated, HasModelPermission]
+
+    def get_queryset(self):
+        return Product.objects.filter(store=self.request.user.store)
+
 
 
 class ProductUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
-    queryset = Product.objects.all()
     serializer_class = ProductSerializer
     permission_classes = [IsAuthenticated, HasModelPermission]
+
+    def get_queryset(self):
+        return Product.objects.filter(store=self.request.user.store)
+
 
 
 from rest_framework.parsers import MultiPartParser, FormParser
 
 class CategoryCRUDAPI(generics.ListCreateAPIView):
-    queryset = ProductCategory.objects.all()
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [IsAuthenticated, HasModelPermission]
+
+    def get_queryset(self):
+        return ProductCategory.objects.filter(store=self.request.user.store)
 
     def get_serializer_class(self):
         if self.request.method == "POST":
             return ProductCategoryCreateSerializer
         return ProductCategoryResponseSerializer
 
+
 class CategoryUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
-    queryset = ProductCategory.objects.all()
     parser_classes = [MultiPartParser, FormParser]
     permission_classes = [IsAuthenticated, HasModelPermission]
+
+    def get_queryset(self):
+        return ProductCategory.objects.filter(store=self.request.user.store)
 
     def get_serializer_class(self):
         if self.request.method in ["PUT", "PATCH"]:
             return ProductCategoryUpdateSerializer
         return ProductCategoryResponseSerializer
-
 
 
 class ProductSpecificationAPI(generics.ListCreateAPIView):
@@ -98,15 +108,10 @@ class AttachmentByEntityAPI(generics.ListAPIView):
     permission_classes = [IsAuthenticated, HasModelPermission]
 
     def get_queryset(self):
-        """
-        Filter attachments by entity_type and optionally entity_id
-        Example query params:
-        /attachments/by-entity/?entity_type=product&entity_id=<uuid>
-        """
+        qs = Attachment.objects.filter(store=self.request.user.store)
+
         entity_type = self.request.query_params.get("entity_type")
         entity_id = self.request.query_params.get("entity_id")
-
-        qs = Attachment.objects.all()
 
         if entity_type:
             qs = qs.filter(entity_type=entity_type)
@@ -114,6 +119,7 @@ class AttachmentByEntityAPI(generics.ListAPIView):
             qs = qs.filter(entity_id=entity_id)
 
         return qs
+
     
 class ProductDetailTypeListCreateAPI(generics.ListCreateAPIView):
     queryset = ProductDetailType.objects.all()

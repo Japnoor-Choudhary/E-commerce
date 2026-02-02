@@ -9,7 +9,6 @@ from .models import (
 )
 
 
-
 class ProductCategoryCreateSerializer(serializers.ModelSerializer):
     attachments = serializers.ListField(
         child=serializers.FileField(),
@@ -23,19 +22,18 @@ class ProductCategoryCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         attachments = validated_data.pop("attachments", [])
-
-        # 1️⃣ Create category
         category = ProductCategory.objects.create(**validated_data)
 
-        # 2️⃣ Create attachment records
         for file in attachments:
             Attachment.objects.create(
                 entity_type="category",
                 entity_id=category.id,
+                store=category.store,   # ✅ REQUIRED
                 file=file,
             )
 
         return category
+
 
 class ProductCategoryResponseSerializer(serializers.ModelSerializer):
     attachments = serializers.SerializerMethodField()
@@ -43,14 +41,16 @@ class ProductCategoryResponseSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductCategory
         fields = "__all__"
-        read_only_fields = ("attachments",)
-        
+
     def get_attachments(self, obj):
-        qs = Attachment.objects.filter(
-            entity_type="category",
-            entity_id=obj.id
-        )
-        return AttachmentSerializer(qs, many=True).data
+        return AttachmentSerializer(
+            Attachment.objects.filter(
+                entity_type="category",
+                entity_id=obj.id
+            ),
+            many=True
+        ).data
+
 
 class ProductCategoryUpdateSerializer(serializers.ModelSerializer):
     attachments = serializers.ListField(
@@ -65,23 +65,31 @@ class ProductCategoryUpdateSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         attachments = validated_data.pop("attachments", [])
-
         instance = super().update(instance, validated_data)
 
         for file in attachments:
             Attachment.objects.create(
                 entity_type="category",
                 entity_id=instance.id,
+                store=instance.store,   # ✅ REQUIRED
                 file=file,
             )
 
         return instance
 
 
+
 class ProductSerializer(serializers.ModelSerializer):
+    categories = ProductCategoryResponseSerializer(
+        source="primary_category",
+        read_only=True
+    )
+
     class Meta:
         model = Product
         fields = "__all__"
+        read_only_fields = ("slug", "created_at", "updated_at")
+
 
 class ProductSpecificationSerializer(serializers.ModelSerializer):
     class Meta:
@@ -124,10 +132,13 @@ class AttachmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = Attachment
         fields = "__all__"
+        read_only_fields = ("file_type", "slug", "created_at", "updated_at")
+
 
 class AttachmentBulkUploadSerializer(serializers.Serializer):
     entity_type = serializers.ChoiceField(choices=Attachment.ENTITY_TYPE_CHOICES)
     entity_id = serializers.UUIDField()
+    store = serializers.UUIDField()   # ✅ REQUIRED
     files = serializers.ListField(
         child=serializers.FileField(),
         write_only=True
@@ -135,17 +146,19 @@ class AttachmentBulkUploadSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         files = validated_data.pop("files")
+        store_id = validated_data.pop("store")
 
         attachments = []
         for file in files:
             attachment = Attachment.objects.create(
-                entity_type=validated_data["entity_type"],
-                entity_id=validated_data["entity_id"],
+                store_id=store_id,
                 file=file,
+                **validated_data
             )
             attachments.append(attachment)
 
         return attachments
+
 
 class ProductDetailTypeSerializer(serializers.ModelSerializer):
     class Meta:

@@ -4,7 +4,7 @@ from django.db import models
 from django.utils.text import slugify
 from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator
-
+from organization.models import Store
 
 # =====================================================
 # Helpers
@@ -25,11 +25,14 @@ def detect_file_type(filename: str) -> str:
 def attachment_upload_path(instance, filename):
     """
     media/
+    stores/<store_id>(uuid)/
       products/<entity_id>/<filename>
       categories/<entity_id>/<filename>
       variations/<entity_id>/<filename>
     """
     return os.path.join(
+        "stores",
+        str(instance.store_id),
         f"{instance.entity_type}s",
         str(instance.entity_id),
         filename
@@ -53,6 +56,11 @@ def get_entity_slug(entity_type, entity_id):
     except model.DoesNotExist:
         return "unknown"
 
+
+
+
+
+
 # =====================================================
 # Attachment (Generic Media)
 # =====================================================
@@ -68,7 +76,11 @@ class Attachment(models.Model):
 
     entity_type = models.CharField(max_length=50, choices=ENTITY_TYPE_CHOICES)
     entity_id = models.UUIDField()
-
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="attachments"
+    )
     file = models.FileField(upload_to=attachment_upload_path)
     file_type = models.CharField(max_length=20, blank=True)
     slug = models.SlugField(max_length=500, blank=True)
@@ -98,10 +110,14 @@ class Attachment(models.Model):
 
 class ProductCategory(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
+    
     name = models.CharField(max_length=100)
     slug = models.SlugField(max_length=120, unique=True, blank=True)
-
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="categories"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -115,7 +131,11 @@ class Product(models.Model):
 
     name = models.CharField(max_length=255)
     slug = models.SlugField(max_length=255, unique=True, blank=True)
-
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="products"
+    )
     description = models.TextField()
     short_description = models.CharField(max_length=500)
 

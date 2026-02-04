@@ -7,6 +7,14 @@ urlpatterns = [
     # =========================
     path("cart/", CartListCreateAPI.as_view(), name="cart-list-create"),
     path("cart/<uuid:pk>/", CartDeleteAPI.as_view(), name="cart-delete"),
+    path('cart/apply-coupon/', CartApplyCouponAPI.as_view(), name='cart-apply-coupon'),  # POST
+    path('cart/remove-coupon/', CartRemoveCouponAPI.as_view(), name='cart-remove-coupon'),  # POST
+    
+    # =========================
+    # Cart
+    # =========================    
+    path("coupons/", CouponListCreateAPI.as_view(), name="coupon-list-create"),
+    path("coupons/<uuid:pk>/", CouponRetrieveUpdateDeleteAPI.as_view(), name="coupon-detail"),
 
     # =========================
     # Wishlists
@@ -21,6 +29,7 @@ urlpatterns = [
     path("wishlist-items/",WishlistItemAPI.as_view(),name="wishlist-item-add-list"),
     path("wishlist-items/<uuid:pk>/",WishlistItemDeleteAPI.as_view(),name="wishlist-item-delete"),
     path("wishlist-products/",WishlistProductGroupedAPI.as_view(),name="wishlist-products-grouped"),
+    
     # =========================
     # Orders
     # =========================

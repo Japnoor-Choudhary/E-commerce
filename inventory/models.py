@@ -6,7 +6,7 @@ from organization.models import Store
 
 class Inventory(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    
+
     store = models.ForeignKey(
         Store,
         on_delete=models.CASCADE,
@@ -36,5 +36,20 @@ class Inventory(models.Model):
 
     def __str__(self):
         if self.variation:
-            return f"{self.product.name} ({self.variation.value}) - {self.quantity}"
+            return f"{self.product.name} ({self.variation.id}) - {self.quantity}"
         return f"{self.product.name} - {self.quantity}"
+
+    @classmethod
+    def get_inventory(cls, product, variation=None, store=None):
+        """
+        Safe method to fetch inventory for a product + optional variation + store.
+        Returns None if not found.
+        """
+        qs = cls.objects.select_for_update().filter(product=product)
+        if store:
+            qs = qs.filter(store=store)
+        if variation:
+            qs = qs.filter(variation=variation)
+        else:
+            qs = qs.filter(variation__isnull=True)
+        return qs.first()

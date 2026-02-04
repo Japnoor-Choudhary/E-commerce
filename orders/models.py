@@ -7,6 +7,94 @@ from django.utils import timezone
 User = settings.AUTH_USER_MODEL
 
 # ============================
+# Coupons
+# ============================
+class Coupon(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    code = models.CharField(max_length=50, unique=True)
+
+    discount_percent = models.DecimalField(max_digits=5, decimal_places=2)
+
+    max_discount_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True
+    )
+
+    min_order_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0
+    )
+
+    # OPTIONAL
+    total_user_limit = models.PositiveIntegerField(
+        null=True,
+        blank=True,
+        help_text="Max distinct users allowed"
+    )
+
+    # OPTIONAL (0 or negative = infinite)
+    usage_limit_per_user = models.IntegerField(
+        null=True,
+        blank=True,
+        default=0
+    )
+
+    active = models.BooleanField(default=True)
+
+    # OPTIONAL
+    start_date = models.DateTimeField(null=True, blank=True)
+    end_date = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(default=timezone.now)
+
+    def __str__(self):
+        return self.code
+
+    def is_within_date(self):
+        now = timezone.now()
+
+        if self.start_date and now < self.start_date:
+            return False
+
+        if self.end_date and now > self.end_date:
+            return False
+
+        return True
+
+    # ---------------------------
+    # Coupon State Helpers
+    # ---------------------------
+
+    def deactivate(self):
+        if self.active:
+            self.active = False
+            self.save(update_fields=["active"])
+
+
+class CouponUsage(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    coupon = models.ForeignKey(
+        Coupon,
+        on_delete=models.CASCADE,
+        related_name="usages"
+    )
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    times_used = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        unique_together = ("coupon", "user")
+
+    def __str__(self):
+        return f"{self.user} - {self.coupon.code} ({self.times_used})"
+
+
+# ============================
 # Cart
 # ============================
 class CartItem(models.Model):
@@ -22,6 +110,19 @@ class CartItem(models.Model):
 
     def __str__(self):
         return f"{self.user} - {self.product.name} ({self.quantity})"
+    
+class CartCoupon(models.Model):
+    user = models.OneToOneField(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="cart_coupon"
+    )
+    coupon = models.ForeignKey(Coupon, on_delete=models.CASCADE)
+    applied_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.user} - {self.coupon.code}"
+
 
 
 # ============================
@@ -54,37 +155,6 @@ class WishlistItem(models.Model):
 
     def __str__(self):
         return f"{self.product.name}"
-
-
-# ============================
-# Coupons
-# ============================
-class Coupon(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    code = models.CharField(max_length=50, unique=True)
-    discount_percent = models.DecimalField(max_digits=5, decimal_places=2)
-    max_discount_amount = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    min_order_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    usage_limit_per_user = models.PositiveIntegerField(default=1)
-    active = models.BooleanField(default=True)
-    start_date = models.DateTimeField()
-    end_date = models.DateTimeField()
-
-    def __str__(self):
-        return self.code
-
-
-class CouponUsage(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    coupon = models.ForeignKey(Coupon, on_delete=models.CASCADE, related_name="usages")
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    times_used = models.PositiveIntegerField(default=0)
-
-    class Meta:
-        unique_together = ("coupon", "user")
-
-    def __str__(self):
-        return f"{self.user} - {self.coupon.code} ({self.times_used})"
 
 
 # ============================

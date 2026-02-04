@@ -1,37 +1,48 @@
 from django.urls import path
-from .views import (
-    ProductCRUDAPI,ProductUpdateDeleteAPI,
-    CategoryCRUDAPI,CategoryUpdateDeleteAPI,
-    ProductSpecificationAPI,ProductSpecificationUpdateAPI,
-    ProductVariationAPI,ProductVariationRetrieveDeleteAPI,
-    AttachmentCRUDAPI,AttachmentUpdateDeleteAPI,AttachmentBulkUploadAPI,AttachmentByEntityAPI,
-    ProductDetailTypeListCreateAPI,ProductDetailTypeRetrieveUpdateDeleteAPI
-)
+from .views import *
 
 urlpatterns = [
+    # -----------------------------
     # Products
-    path("products/data/", ProductCRUDAPI.as_view()),
-    path("products/data/<uuid:pk>/", ProductUpdateDeleteAPI.as_view()),
+    # -----------------------------
+    path("products/data/", ProductCRUDAPI.as_view(), name="product-list-create"),
+    path("products/data/<uuid:pk>/", ProductUpdateDeleteAPI.as_view(), name="product-detail"),
 
+    # -----------------------------
     # Categories
-    path("categories/", CategoryCRUDAPI.as_view()),
-    path("categories/<uuid:pk>/", CategoryUpdateDeleteAPI.as_view()),
+    # -----------------------------
+    path("categories/", CategoryCRUDAPI.as_view(), name="category-list-create"),
+    path("categories/<uuid:pk>/", CategoryUpdateDeleteAPI.as_view(), name="category-detail"),
 
+    # -----------------------------
     # Specifications
-    path("specifications/", ProductSpecificationAPI.as_view()),
-    path("specifications/<uuid:pk>/", ProductSpecificationUpdateAPI.as_view()),
+    # -----------------------------
+    path("specifications/", ProductSpecificationAPI.as_view(), name="specification-list-create"),
+    path("specifications/<uuid:pk>/", ProductSpecificationUpdateAPI.as_view(), name="specification-update"),
 
-    # Variations
-    path("variations/", ProductVariationAPI.as_view()),
-    path("variations/<uuid:pk>/", ProductVariationRetrieveDeleteAPI.as_view()),
+    # -----------------------------
+    # Variants (Single-Shot Create + List)
+    # -----------------------------
+    path("variations/", ProductVariantListCreateAPI.as_view(), name="variant-list-create"),
+    path("variations/<uuid:pk>/", ProductVariantRetrieveUpdateDeleteAPI.as_view(), name="variant-detail"),
 
+# -----------------------------
+# Variant Options
+# -----------------------------
+    path("variant-options/",ProductVariantOptionListAPI.as_view(),name="variant-option-list"),
+    path("variant-options/<uuid:pk>/",ProductVariantOptionUpdateDeleteAPI.as_view(),name="variant-option-detail"),
+
+    # -----------------------------
     # Attachments
-    path("attachments/", AttachmentCRUDAPI.as_view()),
-    path("attachments/<uuid:pk>/", AttachmentUpdateDeleteAPI.as_view()),
-    path("attachments/bulk/", AttachmentBulkUploadAPI.as_view()),
-    path("attachments/by-entity/", AttachmentByEntityAPI.as_view()),
+    # -----------------------------
+    path("attachments/", AttachmentCRUDAPI.as_view(), name="attachment-list-create"),
+    path("attachments/<uuid:pk>/", AttachmentUpdateDeleteAPI.as_view(), name="attachment-detail"),
+    path("attachments/bulk/", AttachmentBulkUploadAPI.as_view(), name="attachment-bulk-upload"),
+    path("attachments/by-entity/", AttachmentByEntityAPI.as_view(), name="attachment-by-entity"),
 
-    
-    path("detail-types/", ProductDetailTypeListCreateAPI.as_view()),
-    path("detail-types/<uuid:pk>/", ProductDetailTypeRetrieveUpdateDeleteAPI.as_view()),
+    # -----------------------------
+    # Detail Types
+    # -----------------------------
+    path("detail-types/", ProductDetailTypeListCreateAPI.as_view(), name="detail-type-list-create"),
+    path("detail-types/<uuid:pk>/", ProductDetailTypeRetrieveUpdateDeleteAPI.as_view(), name="detail-type-detail"),
 ]

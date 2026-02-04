@@ -5,7 +5,8 @@ from .models import (
     Product,
     ProductDetailType,
     ProductSpecification,
-    ProductVariation
+    ProductVariant,
+    ProductVariantOption
 )
 
 # =====================================================
@@ -13,49 +14,33 @@ from .models import (
 # =====================================================
 @admin.register(Attachment)
 class AttachmentAdmin(admin.ModelAdmin):
-    list_display = ('id', 'entity_type', 'entity_id', 'file_type', 'slug', 'is_primary', 'created_at')
-    list_filter = ('entity_type', 'file_type', 'is_primary')
-    search_fields = ('slug',)
+    list_display = ('id', 'entity_type', 'entity_id', 'file_type', 'slug', 'is_primary', 'store', 'created_at')
+    list_filter = ('entity_type', 'store', 'file_type', 'is_primary', 'created_at')
+    search_fields = ('slug', 'entity_id')
     readonly_fields = ('file_type', 'slug', 'created_at', 'updated_at')
+    ordering = ('-created_at',)
 
 # =====================================================
 # Product Category Admin
 # =====================================================
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'created_at', 'updated_at')
-    search_fields = ('name',)
-    prepopulated_fields = {'slug': ('name',)}  # auto-slug in admin
-
-# =====================================================
-# Product Specification Inline
-# =====================================================
-class ProductSpecificationInline(admin.TabularInline):
-    model = ProductSpecification
-    extra = 1
-    readonly_fields = ('id',)
-    fields = ('key', 'value', 'detail_type')
-
-# =====================================================
-# Product Variation Inline
-# =====================================================
-class ProductVariationInline(admin.TabularInline):
-    model = ProductVariation
-    extra = 1
-    readonly_fields = ('id',)
-    fields = ('key', 'value', 'detail_type')
+    list_display = ('name', 'slug', 'store', 'created_at')
+    list_filter = ('store',)
+    search_fields = ('name', 'slug')
+    readonly_fields = ('slug', 'created_at', 'updated_at')
+    ordering = ('name',)
 
 # =====================================================
 # Product Admin
 # =====================================================
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'is_active', 'primary_category', 'created_at')
-    list_filter = ('is_active', 'primary_category')
-    search_fields = ('name', 'slug', 'description', 'short_description')
+    list_display = ('name', 'slug', 'store', 'primary_category', 'is_active', 'is_adult', 'created_at')
+    list_filter = ('store', 'is_active', 'is_adult', 'primary_category')
+    search_fields = ('name', 'slug')
     readonly_fields = ('slug', 'created_at', 'updated_at')
-    inlines = [ProductSpecificationInline, ProductVariationInline]
-    prepopulated_fields = {'slug': ('name',)}  # optional, admin auto-slug
+    ordering = ('-created_at',)
 
 # =====================================================
 # Product Detail Type Admin
@@ -63,23 +48,39 @@ class ProductAdmin(admin.ModelAdmin):
 @admin.register(ProductDetailType)
 class ProductDetailTypeAdmin(admin.ModelAdmin):
     list_display = ('name', 'is_active', 'created_at')
-    search_fields = ('name',)
     list_filter = ('is_active',)
+    search_fields = ('name',)
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('name',)
 
 # =====================================================
 # Product Specification Admin
 # =====================================================
 @admin.register(ProductSpecification)
 class ProductSpecificationAdmin(admin.ModelAdmin):
-    list_display = ('product', 'key', 'value', 'detail_type')
-    list_filter = ('detail_type', 'product')
+    list_display = ('product', 'detail_type', 'key', 'value', 'created_at')
+    list_filter = ('product__store', 'detail_type')
     search_fields = ('key', 'value', 'product__name')
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('product', 'key')
 
 # =====================================================
-# Product Variation Admin
+# Product Variant Admin
 # =====================================================
-@admin.register(ProductVariation)
-class ProductVariationAdmin(admin.ModelAdmin):
-    list_display = ('product', 'key', 'value', 'detail_type')
-    list_filter = ('detail_type', 'product')
-    search_fields = ('key', 'value', 'product__name')
+@admin.register(ProductVariant)
+class ProductVariantAdmin(admin.ModelAdmin):
+    list_display = ('id', 'product', 'price', 'quantity', 'created_at')
+    list_filter = ('product__store',)
+    search_fields = ('product__name',)
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('-created_at',)
+
+# =====================================================
+# Product Variant Option Admin
+# =====================================================
+@admin.register(ProductVariantOption)
+class ProductVariantOptionAdmin(admin.ModelAdmin):
+    list_display = ('variant', 'key', 'value')
+    list_filter = ('variant__product__store', 'key')
+    search_fields = ('key', 'value', 'variant__product__name')
+    ordering = ('variant', 'key')

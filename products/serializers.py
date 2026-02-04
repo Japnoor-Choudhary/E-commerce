@@ -1,39 +1,39 @@
 from rest_framework import serializers
-from .models import (
-    Product,
-    ProductCategory,
-    ProductSpecification,
-    ProductVariation,
-    Attachment,
-    ProductDetailType,
-)
+from .models import *
 
+# -----------------------------
+# Attachment
+# -----------------------------
+class AttachmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Attachment
+        fields = "__all__"
+        read_only_fields = ("store", "file_type", "slug", "created_at", "updated_at")
 
+# -----------------------------
+# Product Category
+# -----------------------------
 class ProductCategoryCreateSerializer(serializers.ModelSerializer):
     attachments = serializers.ListField(
-        child=serializers.FileField(),
-        write_only=True,
-        required=False
+        child=serializers.FileField(), write_only=True, required=False
     )
 
     class Meta:
         model = ProductCategory
         fields = "__all__"
+        read_only_fields = ("store",)
 
     def create(self, validated_data):
         attachments = validated_data.pop("attachments", [])
-        category = ProductCategory.objects.create(**validated_data)
-
+        category = super().create(validated_data)
         for file in attachments:
             Attachment.objects.create(
                 entity_type="category",
                 entity_id=category.id,
-                store=category.store,   # ✅ REQUIRED
-                file=file,
+                store=category.store,
+                file=file
             )
-
         return category
-
 
 class ProductCategoryResponseSerializer(serializers.ModelSerializer):
     attachments = serializers.SerializerMethodField()
@@ -46,123 +46,136 @@ class ProductCategoryResponseSerializer(serializers.ModelSerializer):
         return AttachmentSerializer(
             Attachment.objects.filter(
                 entity_type="category",
-                entity_id=obj.id
+                entity_id=obj.id,
+                store=obj.store
             ),
             many=True
         ).data
 
-
 class ProductCategoryUpdateSerializer(serializers.ModelSerializer):
     attachments = serializers.ListField(
-        child=serializers.FileField(),
-        write_only=True,
-        required=False
+        child=serializers.FileField(), write_only=True, required=False
     )
 
     class Meta:
         model = ProductCategory
-        fields = "__all__"
+        exclude = ("store", "slug", "created_at", "updated_at")
 
     def update(self, instance, validated_data):
         attachments = validated_data.pop("attachments", [])
         instance = super().update(instance, validated_data)
-
         for file in attachments:
             Attachment.objects.create(
                 entity_type="category",
                 entity_id=instance.id,
-                store=instance.store,   # ✅ REQUIRED
-                file=file,
+                store=instance.store,
+                file=file
             )
-
         return instance
 
-
-
+# -----------------------------
+# Product
+# -----------------------------
 class ProductSerializer(serializers.ModelSerializer):
-    categories = ProductCategoryResponseSerializer(
-        source="primary_category",
-        read_only=True
-    )
-
     class Meta:
         model = Product
         fields = "__all__"
-        read_only_fields = ("slug", "created_at", "updated_at")
+        read_only_fields = ("store", "slug", "created_at", "updated_at")
 
-
+# -----------------------------
+# Product Specification
+# -----------------------------
 class ProductSpecificationSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductSpecification
         fields = "__all__"
 
-    def update(self, instance, validated_data):
-        new_key = validated_data.get("key", instance.key)
-        new_value = validated_data.get("value", instance.value)
+# -----------------------------
+# Product Variant & Options
+# -----------------------------
 
-        # CASE 1: Key and value are the same → normal update (other fields)
-        if new_key == instance.key and new_value == instance.value:
-            return super().update(instance, validated_data)
+class VariantOptionSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    value = serializers.CharField()
+    
+class ProductVariantOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductVariantOption
+        fields = "__all__"
 
-        # CASE 2: Key exists and value is different → create variation
-        if new_key == instance.key and new_value != instance.value:
-            ProductVariation.objects.create(
-                product=instance.product,
-                detail_type=instance.detail_type,
-                key=new_key,
-                value=new_value,
+class ProductVariantSerializer(serializers.ModelSerializer):
+    options = ProductVariantOptionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = ProductVariant
+        fields = [
+            "id",
+            "product",
+            "price",
+            "quantity",
+            "options",
+        ]
+
+    def create(self, validated_data):
+        options = validated_data.pop("options")
+
+        variant = ProductVariant.objects.create(**validated_data)
+
+        for opt in options:
+            ProductVariantOption.objects.create(
+                variant=variant,
+                key=opt["key"],
+                value=opt["value"]
             )
-            # update other fields in specification if any (like detail_type)
-            for field in validated_data:
-                if field not in ["key", "value"]:
-                    setattr(instance, field, validated_data[field])
-            instance.save(update_fields=[f for f in validated_data if f not in ["key", "value"]])
-            return instance
 
-        # CASE 3: Key changed → update specification normally
-        return super().update(instance, validated_data)
+        return variant
 
-
-class ProductVariationSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = ProductVariation
-        fields = "__all__"
-
-class AttachmentSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Attachment
-        fields = "__all__"
-        read_only_fields = ("file_type", "slug", "created_at", "updated_at")
-
-
-class AttachmentBulkUploadSerializer(serializers.Serializer):
-    entity_type = serializers.ChoiceField(choices=Attachment.ENTITY_TYPE_CHOICES)
-    entity_id = serializers.UUIDField()
-    store = serializers.UUIDField()   # ✅ REQUIRED
-    files = serializers.ListField(
-        child=serializers.FileField(),
-        write_only=True
+class ProductVariantCreateSerializer(serializers.Serializer):
+    product_id = serializers.UUIDField()
+    variants = serializers.ListField(
+        child=serializers.DictField(),
+        min_length=1
     )
 
     def create(self, validated_data):
-        files = validated_data.pop("files")
-        store_id = validated_data.pop("store")
+        product = Product.objects.get(id=validated_data["product_id"])
+        created_variants = []
 
-        attachments = []
-        for file in files:
-            attachment = Attachment.objects.create(
-                store_id=store_id,
-                file=file,
-                **validated_data
+        for variant_data in validated_data["variants"]:
+            options = variant_data.pop("options", {})
+
+            variant = ProductVariant.objects.create(
+                product=product,
+                price=variant_data.get("price", 0),
+                quantity=variant_data.get("quantity", 0)
             )
-            attachments.append(attachment)
 
-        return attachments
+            for key, value in options.items():
+                ProductVariantOption.objects.create(
+                    variant=variant,
+                    key=key,
+                    value=value
+                )
 
+            created_variants.append(variant)
 
+        return created_variants
+
+# -----------------------------
+# Product Detail Type
+# -----------------------------
 class ProductDetailTypeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductDetailType
         fields = "__all__"
-        
-        
+
+# -----------------------------
+# Attachment Bulk Upload
+# -----------------------------
+class AttachmentBulkUploadSerializer(serializers.Serializer):
+    entity_type = serializers.ChoiceField(choices=Attachment.ENTITY_TYPE_CHOICES)
+    entity_id = serializers.UUIDField()
+    files = serializers.ListField(
+        child=serializers.FileField(), write_only=True
+    )
+

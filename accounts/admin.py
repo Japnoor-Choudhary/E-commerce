@@ -70,3 +70,33 @@ class UserAdmin(BaseUserAdmin):
             ),
         }),
     )
+
+from django.contrib import admin
+from .models import Address
+
+@admin.register(Address)
+class AddressAdmin(admin.ModelAdmin):
+    list_display = (
+        "user",
+        "type",
+        "line1",
+        "line2",
+        "city",
+        "state",
+        "country",
+        "postal_code",
+        "is_primary",
+        "created_at",
+        "updated_at",
+    )
+    list_filter = ("type", "is_primary", "country", "state")
+    search_fields = (
+        "user__email",
+        "line1",
+        "line2",
+        "city",
+        "state",
+        "country",
+        "postal_code",
+    )
+    ordering = ("user", "is_primary", "created_at")

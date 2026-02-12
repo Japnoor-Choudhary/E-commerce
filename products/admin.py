@@ -2,12 +2,15 @@ from django.contrib import admin
 from .models import (
     Attachment,
     ProductCategory,
+    Brand,
     Product,
     ProductDetailType,
-    ProductSpecification,
     ProductVariant,
-    ProductVariantOption
+    ProductVariantOption,
+    Review,
+    ReviewHelpfulVote,
 )
+
 
 # =====================================================
 # Attachment Admin
@@ -25,7 +28,7 @@ class AttachmentAdmin(admin.ModelAdmin):
 # =====================================================
 @admin.register(ProductCategory)
 class ProductCategoryAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'store', 'created_at')
+    list_display = ('id','name', 'slug', 'store', 'created_at')
     list_filter = ('store',)
     search_fields = ('name', 'slug')
     readonly_fields = ('slug', 'created_at', 'updated_at')
@@ -36,7 +39,7 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 # =====================================================
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'slug', 'store', 'primary_category', 'is_active', 'is_adult', 'created_at')
+    list_display = ('id','name', 'slug', 'store', 'primary_category', 'is_active', 'is_adult', 'created_at')
     list_filter = ('store', 'is_active', 'is_adult', 'primary_category')
     search_fields = ('name', 'slug')
     readonly_fields = ('slug', 'created_at', 'updated_at')
@@ -54,22 +57,11 @@ class ProductDetailTypeAdmin(admin.ModelAdmin):
     ordering = ('name',)
 
 # =====================================================
-# Product Specification Admin
-# =====================================================
-@admin.register(ProductSpecification)
-class ProductSpecificationAdmin(admin.ModelAdmin):
-    list_display = ('product', 'detail_type', 'key', 'value', 'created_at')
-    list_filter = ('product__store', 'detail_type')
-    search_fields = ('key', 'value', 'product__name')
-    readonly_fields = ('created_at', 'updated_at')
-    ordering = ('product', 'key')
-
-# =====================================================
 # Product Variant Admin
 # =====================================================
 @admin.register(ProductVariant)
 class ProductVariantAdmin(admin.ModelAdmin):
-    list_display = ('id', 'product', 'price', 'quantity', 'created_at')
+    list_display = ('id', 'product', 'price', 'mrp','quantity', 'created_at')
     list_filter = ('product__store',)
     search_fields = ('product__name',)
     readonly_fields = ('created_at', 'updated_at')
@@ -80,7 +72,46 @@ class ProductVariantAdmin(admin.ModelAdmin):
 # =====================================================
 @admin.register(ProductVariantOption)
 class ProductVariantOptionAdmin(admin.ModelAdmin):
-    list_display = ('variant', 'key', 'value')
+    list_display = ('id','variant', 'key', 'value')
     list_filter = ('variant__product__store', 'key')
     search_fields = ('key', 'value', 'variant__product__name')
     ordering = ('variant', 'key')
+
+# =====================================================
+# Brand Admin
+# =====================================================
+@admin.register(Brand)
+class BrandAdmin(admin.ModelAdmin):
+    list_display = ('id', 'name', 'slug', 'store', 'is_active', 'created_at')
+    list_filter = ('store', 'is_active')
+    search_fields = ('name', 'slug')
+    readonly_fields = ('slug', 'created_at')
+    ordering = ('name',)
+
+# =====================================================
+# Review Admin
+# =====================================================
+@admin.register(Review)
+class ReviewAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'product',
+        'variant',
+        'user',
+        'rating',
+        'is_deleted',
+        'is_hidden',
+        'created_at',
+    )
+    list_filter = ('rating', 'is_deleted', 'is_hidden', 'created_at')
+    search_fields = ('product__name', 'user__email', 'title')
+    readonly_fields = ('created_at', 'updated_at')
+    ordering = ('-created_at',)
+# =====================================================
+# Review Helpful Vote Admin
+# =====================================================
+@admin.register(ReviewHelpfulVote)
+class ReviewHelpfulVoteAdmin(admin.ModelAdmin):
+    list_display = ('id', 'review', 'user')
+    list_filter = ('review__product',)
+    search_fields = ('review__product__name', 'user__email')

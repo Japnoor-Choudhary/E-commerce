@@ -7,9 +7,8 @@ from .models import (
     OrderItem,
     OrderTracking,
     Coupon,
-    CouponUsage
 )
-from products.models import Product, ProductVariant
+from products.models import Product
 
 
 # ---------------------------

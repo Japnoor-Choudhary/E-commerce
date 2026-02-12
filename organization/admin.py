@@ -43,6 +43,7 @@ class CompanyAdmin(admin.ModelAdmin):
 @admin.register(Store)
 class StoreAdmin(admin.ModelAdmin):
     list_display = (
+        'id',
         'name',
         'company',
         'slug',

@@ -8,6 +8,7 @@ from .models import (
     Order,
     OrderItem,
     OrderTracking,
+    CartCoupon
 )
 
 # ============================
@@ -19,6 +20,14 @@ class CartItemAdmin(admin.ModelAdmin):
     list_filter = ("created_at",)
     search_fields = ("user__email", "product__name")
     ordering = ("-created_at",)
+
+@admin.register(CartCoupon)
+class CartCouponAdmin(admin.ModelAdmin):
+    list_display = ("user", "coupon", "applied_at")
+    search_fields = ("user__email", "coupon__code")
+    list_filter = ("coupon", "applied_at")
+    ordering = ("-applied_at",)
+    autocomplete_fields = ("user", "coupon")
 
 
 # ============================
@@ -43,22 +52,24 @@ class WishlistAdmin(admin.ModelAdmin):
 # ============================
 # Coupons
 # ============================
+
+
+
 @admin.register(Coupon)
 class CouponAdmin(admin.ModelAdmin):
     list_display = (
         "code",
-        "discount_percent",
+        "discount_type",
+        "discount_value",
         "max_discount_amount",
         "min_order_amount",
-        "usage_limit_per_user",
         "active",
-        "start_date",
-        "end_date",
     )
-    list_filter = ("active", "start_date", "end_date")
+
+    list_filter = ("active", "discount_type")
     search_fields = ("code",)
-    ordering = ("-start_date",)
-    readonly_fields = ("id",)
+    ordering = ("-id",)
+
 
 
 @admin.register(CouponUsage)

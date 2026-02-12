@@ -4,15 +4,12 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from collections import defaultdict
 from django.shortcuts import get_object_or_404
+from .services.pricing_engine import PricingEngine
 from django.db import transaction
 from django.db.models import F
 from decimal import Decimal
-from django.utils import timezone
-
-from products.models import Product
 from accounts.permissions import IsAdmin
 from inventory.models import Inventory
-
 from .models import (
     CartItem,
     Wishlist,
@@ -32,7 +29,6 @@ from .serializers import (
     CartApplyCouponSerializer,
     CouponSerializer
 )
-from .utils.coupon import validate_and_calculate_coupon
 
 
 # ---------------------------
@@ -104,32 +100,39 @@ class CartApplyCouponAPI(generics.GenericAPIView):
 
         user = request.user
         coupon_code = serializer.validated_data["coupon_code"]
-        cart_items = CartItem.objects.select_related("product", "variation").filter(user=user)
 
-        if not cart_items.exists():
-            return Response({"detail": "Cart is empty"}, status=status.HTTP_400_BAD_REQUEST)
-
-        subtotal = sum(
-            (item.variation.price if item.variation else item.product.price) * item.quantity
-            for item in cart_items
+        cart_items = (
+            CartItem.objects
+            .select_related("product", "variation")
+            .filter(user=user)
         )
 
-        try:
-            discount, coupon = validate_and_calculate_coupon(
-                coupon_code=coupon_code,
-                user=user,
-                subtotal=subtotal
+        if not cart_items.exists():
+            return Response(
+                {"detail": "Cart is empty"},
+                status=status.HTTP_400_BAD_REQUEST
             )
-        except ValueError as e:
-            return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-        total = subtotal - discount
+        try:
+            coupon = Coupon.objects.get(code=coupon_code, active=True)
+        except Coupon.DoesNotExist:
+            return Response(
+                {"detail": "Invalid or inactive coupon"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        pricing = PricingEngine.apply(
+            cart_items=cart_items,
+            user_coupon=coupon
+        )
+
         return Response({
             "coupon": coupon.code,
-            "subtotal": subtotal,
-            "discount": discount,
-            "total": total
+            "subtotal": pricing["subtotal"],
+            "discount": pricing["discount"],
+            "total": pricing["total"],
         }, status=status.HTTP_200_OK)
+
 
 
 class CartRemoveCouponAPI(APIView):
@@ -251,82 +254,91 @@ class WishlistProductGroupedAPI(APIView):
 # ---------------------------
 # Place Order API
 # ---------------------------
+
 class PlaceOrderAPI(generics.CreateAPIView):
     permission_classes = [IsAuthenticated]
 
     @transaction.atomic
     def post(self, request):
         user = request.user
-        cart_items = CartItem.objects.select_related("product", "variation").filter(user=user)
+
+        cart_items = (
+            CartItem.objects
+            .select_related("product", "variation")
+            .filter(user=user)
+        )
 
         if not cart_items.exists():
-            return Response({"detail": "Cart is empty"}, status=status.HTTP_400_BAD_REQUEST)
-
-        subtotal = Decimal("0.00")
-        inventory_updates = []
-
-        # ---------------------------
-        # Check inventory and calculate subtotal
-        # ---------------------------
-        for item in cart_items:
-            inventory_qs = Inventory.objects.select_for_update().filter(
-                store=item.product.store,
-                product=item.product
+            return Response(
+                {"detail": "Cart is empty"},
+                status=status.HTTP_400_BAD_REQUEST
             )
 
-            inventory_qs = inventory_qs.filter(variation=item.variation) if item.variation else inventory_qs.filter(variation__isnull=True)
-            inventory = inventory_qs.first()
-
-            # Fallback: if Inventory does not exist, use ProductVariant quantity
-            available_quantity = None
-            if inventory:
-                available_quantity = inventory.quantity
-            elif item.variation:
-                available_quantity = item.variation.quantity
-            else:
-                available_quantity = getattr(item.product, "quantity", 0)
-
-            if available_quantity is None:
-                return Response({"detail": f"No inventory record for {item.product.name}"}, status=status.HTTP_400_BAD_REQUEST)
-            if available_quantity < item.quantity:
-                return Response({"detail": f"Insufficient stock for {item.product.name}"}, status=status.HTTP_400_BAD_REQUEST)
-
-            price = item.variation.price if item.variation else item.product.price
-            subtotal += price * item.quantity
-
-            inventory_updates.append((inventory_qs, item.quantity))  # save for bulk update later
+        inventory_rows = []
 
         # ---------------------------
-        # Apply coupon if any
+        # Inventory lock & validation
         # ---------------------------
-        coupon_code = request.data.get("coupon_code")
-        discount = Decimal("0.00")
+        for item in cart_items:
+            inventory = Inventory.get_inventory(
+                store=item.product.store,
+                product=item.product,
+                variation=item.variation,
+                lock=True
+            )
+
+            if not inventory:
+                return Response(
+                    {"detail": f"No inventory record for {item.product.name}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if inventory.quantity < item.quantity:
+                return Response(
+                    {"detail": f"Insufficient stock for {item.product.name}"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            inventory_rows.append((inventory, item.quantity))
+
+        # ---------------------------
+        # Apply pricing engine
+        # ---------------------------
         coupon = None
+        coupon_code = request.data.get("coupon_code")
+
         if coupon_code:
             try:
-                discount, coupon = validate_and_calculate_coupon(coupon_code=coupon_code, user=user, subtotal=subtotal)
-            except ValueError as e:
-                return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+                coupon = Coupon.objects.get(code=coupon_code, active=True)
+            except Coupon.DoesNotExist:
+                return Response(
+                    {"detail": "Invalid or inactive coupon"},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
-        total_amount = subtotal - discount
+        pricing = PricingEngine.apply(
+            cart_items=cart_items,
+            user_coupon=coupon
+        )
 
         # ---------------------------
         # Create order
         # ---------------------------
         order = Order.objects.create(
             user=user,
-            subtotal=subtotal,
-            discount_amount=discount,
-            total_amount=total_amount,
+            subtotal=pricing["subtotal"],
+            discount_amount=pricing["discount"],
+            total_amount=pricing["total"],
             status="pending",
             coupon=coupon
         )
 
         # ---------------------------
-        # Create order items and update inventory
+        # Create order items
         # ---------------------------
         for item in cart_items:
             price = item.variation.price if item.variation else item.product.price
+
             OrderItem.objects.create(
                 order=order,
                 product=item.product,
@@ -335,30 +347,42 @@ class PlaceOrderAPI(generics.CreateAPIView):
                 price=price
             )
 
-        # Update inventory after order is created
-        for inventory_qs, qty in inventory_updates:
-            if inventory_qs.exists():
-                inventory_qs.update(quantity=F("quantity") - qty)
+        # ---------------------------
+        # Deduct inventory
+        # ---------------------------
+        for inventory, qty in inventory_rows:
+            inventory.quantity = F("quantity") - qty
+            inventory.save(update_fields=["quantity", "updated_at"])
 
         # ---------------------------
-        # Update coupon usage
+        # Coupon usage
         # ---------------------------
         if coupon:
-            usage, _ = CouponUsage.objects.select_for_update().get_or_create(coupon=coupon, user=user)
+            usage, _ = CouponUsage.objects.select_for_update().get_or_create(
+                coupon=coupon,
+                user=user
+            )
             usage.times_used = F("times_used") + 1
-            usage.save()
+            usage.save(update_fields=["times_used"])
 
         # ---------------------------
-        # Track order and clear cart
+        # Track & clear cart
         # ---------------------------
-        OrderTracking.objects.create(order=order, status="pending", note="Order placed")
+        OrderTracking.objects.create(
+            order=order,
+            status="pending",
+            note="Order placed"
+        )
+
         cart_items.delete()
 
         serializer = OrderSerializer(order)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-
+# =====================================================
+# Re-Order API 
+# =====================================================
 
 class ReOrderAPI(generics.CreateAPIView):
     permission_classes = [IsAuthenticated]
@@ -427,8 +451,6 @@ class ReOrderAPI(generics.CreateAPIView):
 
         serializer = OrderSerializer(new_order)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
-
-
 
 # ---------------------------
 # Coupon Admin APIs

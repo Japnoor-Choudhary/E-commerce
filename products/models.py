@@ -4,6 +4,8 @@ from django.db import models
 from django.utils.text import slugify
 from django.core.exceptions import ValidationError
 from organization.models import Store
+from django.utils import timezone
+from accounts.models import User
 
 # =====================================================
 # Helpers
@@ -23,10 +25,27 @@ def attachment_upload_path(instance, filename):
     name, ext = os.path.splitext(filename)
     safe_name = slugify(name)[:50]
     filename = f"{safe_name}_{uuid.uuid4().hex}{ext}"
-    return os.path.join(
-        f"stores/{instance.store.id}/categorys/{instance.entity_id}",
-        filename
-    ).replace("\\", "/")
+
+    ENTITY_FOLDER_MAP = {
+        "category": "categories",
+        "brand": "brands",
+        "product": "products",
+        "variation": "variations",
+        "review": "products/reviews",
+    }
+
+    base_folder = ENTITY_FOLDER_MAP.get(
+        instance.entity_type,
+        "others"
+    )
+
+    return (
+        f"stores/{instance.store.id}/"
+        f"{base_folder}/"
+        f"{instance.entity_id}/"
+        f"{filename}"
+    )
+
 
 def get_entity_slug(entity_type, entity_id):
     from products.models import Product, ProductCategory
@@ -51,7 +70,9 @@ class Attachment(models.Model):
     ENTITY_TYPE_CHOICES = (
         ("product", "Product"),
         ("category", "Category"),
+        ("brand", "Brand"),
         ("variation", "Variation"),
+        ("review", "Review"),
     )
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
@@ -69,9 +90,9 @@ class Attachment(models.Model):
         filename = os.path.basename(self.file.name)
         name_without_ext = os.path.splitext(filename)[0]
         file_slug = slugify(name_without_ext)
-        entity_slug = get_entity_slug(self.entity_type, self.entity_id)
-        return f"media/{self.entity_type}/{entity_slug}/{file_slug}"
 
+        return f"media/{self.entity_type}/{self.entity_id}/{file_slug}"
+    
     def save(self, *args, **kwargs):
         if self.file:
             self.file_type = detect_file_type(self.file.name)
@@ -87,8 +108,17 @@ class ProductCategory(models.Model):
     name = models.CharField(max_length=100)
     slug = models.SlugField(max_length=120, unique=True, blank=True)
     store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="categories")
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.CASCADE,
+        related_name="subcategories"
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+
 
     def save(self, *args, **kwargs):
         base_slug = slugify(self.name)
@@ -99,6 +129,38 @@ class ProductCategory(models.Model):
                 slug = f"{base_slug}-{i}"
                 i += 1
             self.slug = slug
+        super().save(*args, **kwargs)
+
+# =====================================================
+# Brands
+# =====================================================
+
+class Brand(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    store = models.ForeignKey(Store, on_delete=models.CASCADE,related_name="brands")
+    name = models.CharField(max_length=150)
+    slug = models.SlugField(unique=True)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    def __str__(self):
+        return self.name
+    def generate_unique_slug(self):
+        base_slug = slugify(self.name)
+        slug = base_slug
+        i = 1
+        while Brand.objects.filter(
+            slug=slug,
+            store=self.store
+        ).exclude(pk=self.pk).exists():
+            slug = f"{base_slug}-{i}"
+            i += 1
+        return slug
+
+    def save(self, *args, **kwargs):
+        base_slug = slugify(self.name)
+        if not self.slug or not self.slug.startswith(base_slug):
+            self.slug = self.generate_unique_slug()
         super().save(*args, **kwargs)
 
 # =====================================================
@@ -113,14 +175,11 @@ class Product(models.Model):
     description = models.TextField()
     short_description = models.CharField(max_length=500)
     is_active = models.BooleanField(default=True)
-    primary_category = models.ForeignKey(
-        ProductCategory,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="products"
-    )
+    primary_category = models.ForeignKey(ProductCategory,on_delete=models.SET_NULL,null=True,blank=True,related_name="products")
     is_adult = models.BooleanField(default=False)
+    brand = models.ForeignKey(Brand,on_delete=models.PROTECT,related_name="products",null=True,blank=True)
+    avg_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    review_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -151,19 +210,6 @@ class ProductDetailType(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
 # =====================================================
-# Product Specification
-# =====================================================
-
-class ProductSpecification(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="specifications")
-    detail_type = models.ForeignKey(ProductDetailType, on_delete=models.SET_NULL, null=True, blank=True)
-    key = models.CharField(max_length=100, db_index=True)
-    value = models.CharField(max_length=255)
-    created_at = models.DateTimeField(auto_now_add=True)
-    updated_at = models.DateTimeField(auto_now=True)
-
-# =====================================================
 # Product Variant & Options
 # =====================================================
 
@@ -171,7 +217,10 @@ class ProductVariant(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="variants")
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    mrp = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)  # new field
     quantity = models.PositiveIntegerField(default=0)
+    avg_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
+    review_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -183,3 +232,48 @@ class ProductVariantOption(models.Model):
 
     class Meta:
         unique_together = ("variant", "key", "value")
+
+# =====================================================
+# Reviews
+# =====================================================
+
+class Review(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="reviews")
+
+    product = models.ForeignKey(
+        Product, on_delete=models.CASCADE, related_name="reviews"
+    )
+
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="reviews"
+    )
+
+    rating = models.PositiveSmallIntegerField()  # 1–5
+    title = models.CharField(max_length=150)
+    review_text = models.TextField()
+
+    is_deleted = models.BooleanField(default=False)      # user soft delete
+    is_hidden = models.BooleanField(default=False)       # admin control
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def can_edit(self):
+        return timezone.now() <= self.created_at + timezone.timedelta(hours=1)
+    
+class ReviewHelpfulVote(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name="helpful_votes")
+    user = models.ForeignKey(User, on_delete=models.CASCADE)
+
+    class Meta:
+        unique_together = ("review", "user")
+
+
+

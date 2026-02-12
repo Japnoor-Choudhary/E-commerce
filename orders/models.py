@@ -3,95 +3,83 @@ from decimal import Decimal
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
-
+from model_utils import FieldTracker
 User = settings.AUTH_USER_MODEL
 
 # ============================
 # Coupons
 # ============================
 class Coupon(models.Model):
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    DISCOUNT_TYPE = (
+        ("percent", "Percent"),
+        ("flat", "Flat"),
+    )
 
+    SCOPE_TYPE = (
+        ("product", "Product"),
+        ("category", "Category"),
+        ("cart", "Cart"),
+    )
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     code = models.CharField(max_length=50, unique=True)
 
-    discount_percent = models.DecimalField(max_digits=5, decimal_places=2)
+    discount_type = models.CharField(max_length=10, choices=DISCOUNT_TYPE,default="percent")
+    discount_value = models.DecimalField(max_digits=10, decimal_places=2,default=0)
 
     max_discount_amount = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        null=True,
-        blank=True
+        max_digits=10, decimal_places=2, null=True, blank=True
     )
 
     min_order_amount = models.DecimalField(
-        max_digits=10,
-        decimal_places=2,
-        default=0
+        max_digits=10, decimal_places=2, default=0
     )
 
-    # OPTIONAL
-    total_user_limit = models.PositiveIntegerField(
-        null=True,
-        blank=True,
-        help_text="Max distinct users allowed"
+    is_pre_applied = models.BooleanField(default=False)
+
+    scope = models.CharField(
+        max_length=20,
+        choices=SCOPE_TYPE,
+        default="cart"
     )
 
-    # OPTIONAL (0 or negative = infinite)
-    usage_limit_per_user = models.IntegerField(
-        null=True,
-        blank=True,
-        default=0
+    applicable_products = models.ManyToManyField(
+        "products.Product", blank=True
+    )
+
+    applicable_categories = models.ManyToManyField(
+        "products.ProductCategory", blank=True
     )
 
     active = models.BooleanField(default=True)
 
-    # OPTIONAL
     start_date = models.DateTimeField(null=True, blank=True)
     end_date = models.DateTimeField(null=True, blank=True)
 
     created_at = models.DateTimeField(default=timezone.now)
 
-    def __str__(self):
-        return self.code
-
-    def is_within_date(self):
+    def is_valid(self):
         now = timezone.now()
-
+        if not self.active:
+            return False
         if self.start_date and now < self.start_date:
             return False
-
         if self.end_date and now > self.end_date:
             return False
-
         return True
 
-    # ---------------------------
-    # Coupon State Helpers
-    # ---------------------------
-
-    def deactivate(self):
-        if self.active:
-            self.active = False
-            self.save(update_fields=["active"])
+    def __str__(self):
+        return self.code
 
 
 class CouponUsage(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
-    coupon = models.ForeignKey(
-        Coupon,
-        on_delete=models.CASCADE,
-        related_name="usages"
-    )
+    coupon = models.ForeignKey(Coupon, on_delete=models.CASCADE, related_name="usages")
     user = models.ForeignKey(User, on_delete=models.CASCADE)
-
     times_used = models.PositiveIntegerField(default=0)
 
     class Meta:
         unique_together = ("coupon", "user")
-
-    def __str__(self):
-        return f"{self.user} - {self.coupon.code} ({self.times_used})"
 
 
 # ============================
@@ -178,6 +166,7 @@ class Order(models.Model):
     discount_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     total_amount = models.DecimalField(max_digits=10, decimal_places=2)
     status = models.CharField(max_length=50, choices=STATUS_CHOICES, default="pending")
+    tracker = FieldTracker(fields=["status"])
     shipping_address = models.ForeignKey("accounts.Address", on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)

@@ -7,6 +7,11 @@ urlpatterns = [
     # =========================
     path("cart/", CartListCreateAPI.as_view(), name="cart-list-create"),
     path("cart/<uuid:pk>/", CartDeleteAPI.as_view(), name="cart-delete"),
+    
+    
+    # =========================
+    # Cart Coupons
+    # ========================= 
     path('cart/apply-coupon/', CartApplyCouponAPI.as_view(), name='cart-apply-coupon'),  # POST
     path('cart/remove-coupon/', CartRemoveCouponAPI.as_view(), name='cart-remove-coupon'),  # POST
     

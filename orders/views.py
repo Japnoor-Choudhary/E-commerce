@@ -9,7 +9,7 @@ from django.db import transaction
 from django.db.models import F
 from decimal import Decimal
 from accounts.permissions import IsAdmin
-from inventory.models import Inventory
+
 from .models import (
     CartItem,
     Wishlist,
@@ -251,9 +251,9 @@ class WishlistProductGroupedAPI(APIView):
         return Response(list(product_map.values()))
 
 
-# ---------------------------
-# Place Order API
-# ---------------------------
+# =====================================================
+# PLACE ORDER
+# =====================================================
 
 class PlaceOrderAPI(generics.CreateAPIView):
     permission_classes = [IsAuthenticated]
@@ -274,35 +274,24 @@ class PlaceOrderAPI(generics.CreateAPIView):
                 status=status.HTTP_400_BAD_REQUEST
             )
 
-        inventory_rows = []
-
         # ---------------------------
-        # Inventory lock & validation
+        # Validate stock ONLY
         # ---------------------------
         for item in cart_items:
-            inventory = Inventory.get_inventory(
-                store=item.product.store,
-                product=item.product,
-                variation=item.variation,
-                lock=True
-            )
-
-            if not inventory:
+            if not item.variation:
                 return Response(
-                    {"detail": f"No inventory record for {item.product.name}"},
+                    {"detail": "Product variation is required"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            if inventory.quantity < item.quantity:
+            if item.variation.quantity < item.quantity:
                 return Response(
                     {"detail": f"Insufficient stock for {item.product.name}"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
 
-            inventory_rows.append((inventory, item.quantity))
-
         # ---------------------------
-        # Apply pricing engine
+        # Apply coupon
         # ---------------------------
         coupon = None
         coupon_code = request.data.get("coupon_code")
@@ -337,22 +326,13 @@ class PlaceOrderAPI(generics.CreateAPIView):
         # Create order items
         # ---------------------------
         for item in cart_items:
-            price = item.variation.price if item.variation else item.product.price
-
             OrderItem.objects.create(
                 order=order,
                 product=item.product,
                 variation=item.variation,
                 quantity=item.quantity,
-                price=price
+                price=item.variation.price
             )
-
-        # ---------------------------
-        # Deduct inventory
-        # ---------------------------
-        for inventory, qty in inventory_rows:
-            inventory.quantity = F("quantity") - qty
-            inventory.save(update_fields=["quantity", "updated_at"])
 
         # ---------------------------
         # Coupon usage
@@ -362,11 +342,11 @@ class PlaceOrderAPI(generics.CreateAPIView):
                 coupon=coupon,
                 user=user
             )
-            usage.times_used = F("times_used") + 1
-            usage.save(update_fields=["times_used"])
+            usage.times_used += 1
+            usage.save()
 
         # ---------------------------
-        # Track & clear cart
+        # Track order
         # ---------------------------
         OrderTracking.objects.create(
             order=order,
@@ -376,12 +356,13 @@ class PlaceOrderAPI(generics.CreateAPIView):
 
         cart_items.delete()
 
-        serializer = OrderSerializer(order)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
-
+        return Response(
+            OrderSerializer(order).data,
+            status=status.HTTP_201_CREATED
+        )
 
 # =====================================================
-# Re-Order API 
+# RE-ORDER API
 # =====================================================
 
 class ReOrderAPI(generics.CreateAPIView):
@@ -389,37 +370,48 @@ class ReOrderAPI(generics.CreateAPIView):
 
     @transaction.atomic
     def post(self, request, order_id):
-        # Fetch old order
-        old_order = get_object_or_404(Order, id=order_id, user=request.user)
+        user = request.user
+
+        # Fetch previous order
+        old_order = get_object_or_404(
+            Order.objects.prefetch_related("items__variation", "items__product"),
+            id=order_id,
+            user=user
+        )
+
+        if not old_order.items.exists():
+            return Response(
+                {"detail": "Nothing to reorder"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # ---------------------------
+        # Validate stock & calculate subtotal
+        # ---------------------------
         subtotal = Decimal("0.00")
 
-        # Check inventory and calculate subtotal
-        inventory_map = {}
-        for item in old_order.items.select_related("product", "variation"):
-            inventory = Inventory.get_inventory(
-                product=item.product,
-                variation=item.variation,
-                store=item.product.store
-            )
-            if not inventory:
+        for item in old_order.items.all():
+            variant = item.variation
+
+            if not variant:
                 return Response(
-                    {"detail": f"No inventory record for {item.product.name}"},
+                    {"detail": f"Variation missing for {item.product.name}"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            if inventory.quantity < item.quantity:
+
+            if variant.quantity < item.quantity:
                 return Response(
                     {"detail": f"Insufficient stock for {item.product.name}"},
                     status=status.HTTP_400_BAD_REQUEST
                 )
-            # Store inventory object to reuse for stock deduction
-            inventory_map[item.id] = inventory
-            # Add to subtotal
-            subtotal += item.quantity * (item.variation.price if item.variation else item.product.price)
 
+            subtotal += item.quantity * item.price
+
+        # ---------------------------
         # Create new order
+        # ---------------------------
         new_order = Order.objects.create(
-            user=request.user,
-            shipping_address=old_order.shipping_address,
+            user=user,
             subtotal=subtotal,
             discount_amount=Decimal("0.00"),
             total_amount=subtotal,
@@ -427,30 +419,31 @@ class ReOrderAPI(generics.CreateAPIView):
             reordered_from=old_order
         )
 
-        # Create order items and deduct stock
+        # ---------------------------
+        # Create order items
+        # ---------------------------
         for item in old_order.items.all():
-            price = item.variation.price if item.variation else item.product.price
             OrderItem.objects.create(
                 order=new_order,
                 product=item.product,
                 variation=item.variation,
                 quantity=item.quantity,
-                price=price
+                price=item.price  # current stored price
             )
-            # Deduct stock safely
-            inventory = inventory_map[item.id]
-            inventory.quantity = F("quantity") - item.quantity
-            inventory.save()
 
-        # Track the reorder
+        # ---------------------------
+        # Track reorder
+        # ---------------------------
         OrderTracking.objects.create(
             order=new_order,
             status="pending",
-            note="Reordered with current prices (no coupon applied)"
+            note="Reordered with current availability (no coupon applied)"
         )
 
-        serializer = OrderSerializer(new_order)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(
+            OrderSerializer(new_order).data,
+            status=status.HTTP_201_CREATED
+        )
 
 # ---------------------------
 # Coupon Admin APIs

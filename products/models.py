@@ -91,7 +91,7 @@ class Attachment(models.Model):
         name_without_ext = os.path.splitext(filename)[0]
         file_slug = slugify(name_without_ext)
 
-        return f"media/{self.entity_type}/{self.entity_id}/{file_slug}"
+        return f"media/{self.entity_type}/{self.entity_id}/{file_slug}{os.path.splitext(filename)[1]}"
     
     def save(self, *args, **kwargs):
         if self.file:
@@ -107,7 +107,7 @@ class ProductCategory(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     slug = models.SlugField(max_length=120, unique=True, blank=True)
-    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="categories")
+    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="categories")  
     parent = models.ForeignKey(
         "self",
         null=True,
@@ -118,7 +118,8 @@ class ProductCategory(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
-
+    class Meta:
+        unique_together = ("slug", "store")
 
     def save(self, *args, **kwargs):
         base_slug = slugify(self.name)
@@ -175,7 +176,7 @@ class Product(models.Model):
     description = models.TextField()
     short_description = models.CharField(max_length=500)
     is_active = models.BooleanField(default=True)
-    primary_category = models.ForeignKey(ProductCategory,on_delete=models.SET_NULL,null=True,blank=True,related_name="products")
+    category = models.ForeignKey(ProductCategory,on_delete=models.PROTECT,related_name="products")
     is_adult = models.BooleanField(default=False)
     brand = models.ForeignKey(Brand,on_delete=models.PROTECT,related_name="products",null=True,blank=True)
     avg_rating = models.DecimalField(max_digits=3, decimal_places=2, default=0)
@@ -239,34 +240,32 @@ class ProductVariantOption(models.Model):
 
 class Review(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name="reviews")
-
-    product = models.ForeignKey(
-        Product, on_delete=models.CASCADE, related_name="reviews"
-    )
-
-    variant = models.ForeignKey(
-        ProductVariant,
-        on_delete=models.SET_NULL,
-        null=True,
-        blank=True,
-        related_name="reviews"
-    )
-
+    product = models.ForeignKey(Product,on_delete=models.SET_NULL,null=True,blank=True,related_name="reviews")
     rating = models.PositiveSmallIntegerField()  # 1–5
     title = models.CharField(max_length=150)
     review_text = models.TextField()
-
     is_deleted = models.BooleanField(default=False)      # user soft delete
     is_hidden = models.BooleanField(default=False)       # admin control
-
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def can_edit(self):
         return timezone.now() <= self.created_at + timezone.timedelta(hours=1)
-    
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+
+        if self.product:
+            reviews = self.product.reviews.filter(
+                is_deleted=False,
+                is_hidden=False
+            )
+            avg = reviews.aggregate(models.Avg("rating"))["rating__avg"] or 0
+            count = reviews.count()
+
+            self.product.avg_rating = round(avg, 2)
+            self.product.review_count = count
+            self.product.save(update_fields=["avg_rating", "review_count"])
 class ReviewHelpfulVote(models.Model):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     review = models.ForeignKey(Review, on_delete=models.CASCADE, related_name="helpful_votes")
@@ -274,6 +273,4 @@ class ReviewHelpfulVote(models.Model):
 
     class Meta:
         unique_together = ("review", "user")
-
-
 

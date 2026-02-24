@@ -9,7 +9,6 @@ urlpatterns = [
     path("products/data/<uuid:pk>/", ProductUpdateDeleteAPI.as_view(), name="product-detail"),
     path("related-product/<uuid:product_id>/",RelatedProductListAPI.as_view(),name="related-products"),
 
-
     # -----------------------------
     # Products
     # -----------------------------    
@@ -20,7 +19,8 @@ urlpatterns = [
     # -----------------------------
     path("categories/", CategoryCRUDAPI.as_view(), name="category-list-create"),
     path("categories/<uuid:pk>/", CategoryUpdateDeleteAPI.as_view(), name="category-detail"),
-
+    path("categories/hierarchy/", CategoryHierarchyAPI.as_view()),
+    
     # -----------------------------
     # Variants (Single-Shot Create + List)
     # -----------------------------
@@ -67,4 +67,5 @@ urlpatterns = [
     # -----------------------------
     path("products-export/", ProductExportAPI.as_view()),
     path("products-import/", ProductImportAPI.as_view()),
+    
 ]

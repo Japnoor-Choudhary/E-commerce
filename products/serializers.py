@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from .models import *
 from django.db.models import Sum
+from django.db import transaction    
 # -----------------------------
 # Attachment
 # -----------------------------
@@ -38,6 +39,7 @@ class AttachmentBulkUploadSerializer(serializers.Serializer):
         child=serializers.FileField(),
         write_only=True
     )
+        
 
 # =====================================================
 # Brands
@@ -60,18 +62,11 @@ class BrandSerializer(serializers.ModelSerializer):
         read_only_fields = ("store", "slug", "created_at")
 
     def create(self, validated_data):
-        """
-        Creates a brand.
-        If logo is provided, it is stored as an Attachment.
-        """
-
-        # Remove logo from validated data
         logo = validated_data.pop("logo", None)
 
-        # Create brand instance
+        validated_data["store"] = self.context["request"].user.store
         brand = Brand.objects.create(**validated_data)
 
-        # Save logo as attachment if provided
         if logo:
             Attachment.objects.create(
                 entity_type="brand",
@@ -79,7 +74,6 @@ class BrandSerializer(serializers.ModelSerializer):
                 store=brand.store,
                 file=logo
             )
-
         return brand
 
 class BrandNestedSerializer(serializers.ModelSerializer):
@@ -105,79 +99,72 @@ class BrandNestedSerializer(serializers.ModelSerializer):
 
         return attachment.file.url if attachment else None
 
-
-
 # -----------------------------
 # Product Category
 # -----------------------------
 class ProductCategoryCreateSerializer(serializers.ModelSerializer):
-    """
-    Used to create categories with:
-    - optional parent category
-    - multiple attachments
-    """
+    parent_id = serializers.UUIDField(required=False, allow_null=True)
 
     attachments = serializers.ListField(
         child=serializers.FileField(),
-        write_only=True,
-        required=False
+        required=False,
+        write_only=True
     )
-
-    # Used to assign parent category
-    parent_id = serializers.UUIDField(required=False, allow_null=True)
 
     class Meta:
         model = ProductCategory
         fields = "__all__"
-        read_only_fields = ("store",)
+        read_only_fields = ("store", "slug")
 
     def create(self, validated_data):
-        """
-        Creates a category, assigns parent (if any),
-        and saves attachments.
-        """
+        request = self.context.get("request")
+        store = request.user.store
 
-        attachments = validated_data.pop("attachments", [])
         parent_id = validated_data.pop("parent_id", None)
+        attachments = validated_data.pop("attachments", [])
 
-        # Assign parent category if provided
         if parent_id:
-            validated_data["parent"] = ProductCategory.objects.get(id=parent_id)
-
-        # Assign store from logged-in user
-        validated_data["store"] = self.context["request"].user.store
-
-        category = super().create(validated_data)
-
-        # Save category attachments
-        for file in attachments:
-            Attachment.objects.create(
-                entity_type="category",
-                entity_id=category.id,
-                store=category.store,
-                file=file
+            parent = ProductCategory.objects.get(
+                id=parent_id,
+                store=store
             )
+            validated_data["parent"] = parent
+
+        with transaction.atomic():
+
+            category = ProductCategory.objects.create(
+                store=store,
+                **validated_data
+            )
+
+            for file in attachments:
+                Attachment.objects.create(
+                    entity_type="category",
+                    entity_id=category.id,
+                    store=store,
+                    file=file
+                )
 
         return category
 
-
 class ProductCategoryResponseSerializer(serializers.ModelSerializer):
-    """
-    Used for listing categories with attachments and subcategories.
-    """
-
+    parent_id = serializers.UUIDField(source="parent.id", read_only=True)
     attachments = serializers.SerializerMethodField()
-    subcategories = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductCategory
-        fields = "__all__"
+        fields = [
+            "id",
+            "name",
+            "slug",
+            "parent_id",
+            "store",
+            "attachments",
+            "created_at",
+            "updated_at",
+        ]
 
     def get_attachments(self, obj):
-        """
-        Returns all attachments linked to this category.
-        """
-
         return AttachmentSerializer(
             Attachment.objects.filter(
                 entity_type="category",
@@ -187,21 +174,8 @@ class ProductCategoryResponseSerializer(serializers.ModelSerializer):
             many=True
         ).data
 
-    def get_subcategories(self, obj):
-        """
-        Recursively returns child categories.
-        """
-
-        return ProductCategoryResponseSerializer(
-            obj.subcategories.all(),
-            many=True
-        ).data
-
 
 class ProductCategoryUpdateSerializer(serializers.ModelSerializer):
-    """
-    Used for updating category details and attachments.
-    """
 
     attachments = serializers.ListField(
         child=serializers.FileField(),
@@ -216,20 +190,19 @@ class ProductCategoryUpdateSerializer(serializers.ModelSerializer):
         exclude = ("store", "slug", "created_at", "updated_at")
 
     def update(self, instance, validated_data):
-        """
-        Updates category fields, parent,
-        and optionally adds new attachments.
-        """
-
         attachments = validated_data.pop("attachments", [])
-        parent_id = validated_data.pop("parent_id", None)
+        parent_id = validated_data.pop("parent_id", serializers.empty)
 
-        if parent_id:
-            validated_data["parent"] = ProductCategory.objects.get(id=parent_id)
+        if parent_id is None:
+            instance.parent = None
+        elif parent_id is not serializers.empty:
+            instance.parent = ProductCategory.objects.get(
+                id=parent_id,
+                store=self.context["request"].user.store
+            )
 
         instance = super().update(instance, validated_data)
 
-        # Save new attachments
         for file in attachments:
             Attachment.objects.create(
                 entity_type="category",
@@ -242,43 +215,15 @@ class ProductCategoryUpdateSerializer(serializers.ModelSerializer):
 
 
 class ProductCategoryNestedSerializer(serializers.ModelSerializer):
-    """
-    Minimal category serializer used inside Product response.
-    """
-
-    parent = serializers.SerializerMethodField()
     subcategories = serializers.SerializerMethodField()
 
     class Meta:
         model = ProductCategory
-        fields = ("id", "name", "slug", "parent", "subcategories")
-
-    def get_parent(self, obj):
-        """
-        Returns parent category details.
-        """
-
-        if obj.parent:
-            return {
-                "id": obj.parent.id,
-                "name": obj.parent.name,
-                "slug": obj.parent.slug,
-            }
-        return None
+        fields = ("id", "name", "slug", "subcategories")
 
     def get_subcategories(self, obj):
-        """
-        Returns immediate child categories.
-        """
-
-        return [
-            {
-                "id": sub.id,
-                "name": sub.name,
-                "slug": sub.slug,
-            }
-            for sub in obj.subcategories.all()
-        ]
+        children = obj.subcategories.all()
+        return ProductCategoryNestedSerializer(children, many=True).data
 
 
 # -----------------------------
@@ -321,56 +266,59 @@ class ProductVariantItemSerializer(serializers.Serializer):
     )
     
 class ProductNestedInVariantSerializer(serializers.ModelSerializer):
-    primary_category = ProductCategoryNestedSerializer(read_only=True)
+    categories = ProductCategoryNestedSerializer(many=True, read_only=True)
     brand = BrandNestedSerializer(read_only=True)
 
     class Meta:
         model = Product
         fields = (
-            "id", "name", "slug", "description", "short_description",
-            "is_active", "is_adult", "avg_rating", "review_count",
-            "primary_category", "brand"
+            "id",
+            "name",
+            "slug",
+            "description",
+            "short_description",
+            "is_active",
+            "is_adult",
+            "avg_rating",
+            "review_count",
+            "categories",
+            "brand",
         )
+
 
 class ProductVariantPublicSerializer(serializers.ModelSerializer):
     """
     Public serializer:
     - Shows real price
-    - Hides inventory & internal flags
+    - ALWAYS shows full options
+    - Explains filter matching via match_info
     """
 
-    options = ProductVariantOptionSerializer(many=True, read_only=True)
+    options = serializers.SerializerMethodField()
     attachments = serializers.SerializerMethodField()
-    product = ProductNestedInVariantSerializer(read_only=True) 
+    match_info = serializers.SerializerMethodField()
+    product = ProductNestedInVariantSerializer(read_only=True)
 
     class Meta:
         model = ProductVariant
-        fields = [
+        fields = (
             "id",
             "product",
-            "price",       # ✅ REAL price
+            "price",
             "options",
             "attachments",
-            "mrp"
-        ]
-        def get_options(self, obj):
-            request = self.context.get("request")
-            color_ids = request.query_params.get("color") if request else None
+            "mrp",
+            "match_info",
+        )
 
-            qs = obj.options.all()
+    # ✅ ALWAYS return full options (NO FILTERING HERE)
+    def get_options(self, obj):
+        return ProductVariantOptionSerializer(
+            obj.options.all(),
+            many=True
+        ).data
 
-            if color_ids:
-                qs = qs.filter(
-                    id__in=color_ids.split(","),
-                    key="color"
-                )
-
-            return ProductVariantOptionSerializer(qs, many=True).data
-    
     def get_attachments(self, obj):
-        """
-        Public variant images.
-        """
         return AttachmentSerializer(
             Attachment.objects.filter(
                 entity_type="variation",
@@ -380,12 +328,86 @@ class ProductVariantPublicSerializer(serializers.ModelSerializer):
             many=True
         ).data
 
+    def get_match_info(self, obj):
+        request = self.context.get("request")
+
+        # ✅ Only show match_info for filter API
+        if not request or not request.path.endswith("/variations/filter/"):
+            return None
+
+        requested_colors = {
+            c.lower()
+            for c in request.query_params.get("color", "").split(",")
+            if c
+        }
+
+        requested_sizes = {
+            s.lower()
+            for s in request.query_params.get("size", "").split(",")
+            if s
+        }
+
+
+        # No filters → still useful for filter API
+        if not requested_colors and not requested_sizes:
+            return {
+                "matched": True,
+                "color_matched": True,
+                "size_matched": True,
+                "summary": "🎯 No filters – showing all variants",
+            }
+
+        variant_colors = {
+            opt.value.lower()
+            for opt in obj.options.all()
+            if opt.key == "color"
+        }
+
+        variant_sizes = {
+            opt.value.lower()
+            for opt in obj.options.all()
+            if opt.key == "size"
+        }
+
+        color_matched = bool(variant_colors & requested_colors) if requested_colors else False
+        size_matched = bool(variant_sizes & requested_sizes) if requested_sizes else False
+
+        matched = (
+            (not requested_colors or color_matched)
+            and
+            (not requested_sizes or size_matched)
+        )
+
+        if color_matched and not size_matched:
+            summary = "⚠️ Color matched but size not available"
+        elif size_matched and not color_matched:
+            summary = "⚠️ Size matched but color not available"
+        elif color_matched and size_matched:
+            summary = "🎯 Perfect match"
+        else:
+            summary = "❌ No match"
+
+        return {
+            "matched": matched,
+            "color_matched": color_matched,
+            "size_matched": size_matched,
+            "summary": summary,
+        }
 
 class ProductVariantPrivateSerializer(serializers.ModelSerializer):
-    is_low_stock = serializers.SerializerMethodField()
+    """
+    Private serializer:
+    - Shows inventory
+    - Shows ALL options
+    - Includes match_info for debugging
+    """
+
     options = ProductVariantOptionSerializer(many=True, read_only=True)
     attachments = serializers.SerializerMethodField()
-    product = ProductNestedInVariantSerializer(read_only=True) 
+    is_low_stock = serializers.SerializerMethodField()
+    match_info = serializers.SerializerMethodField()
+    product = ProductNestedInVariantSerializer(read_only=True)
+
     class Meta:
         model = ProductVariant
         fields = (
@@ -396,13 +418,19 @@ class ProductVariantPrivateSerializer(serializers.ModelSerializer):
             "is_low_stock",
             "options",
             "attachments",
-            "mrp"
+            "mrp",
+            "match_info",
         )
 
-
+    # -------------------------
+    # LOW STOCK
+    # -------------------------
     def get_is_low_stock(self, obj):
         return obj.quantity <= 20
 
+    # -------------------------
+    # ATTACHMENTS
+    # -------------------------
     def get_attachments(self, obj):
         return AttachmentSerializer(
             Attachment.objects.filter(
@@ -413,8 +441,76 @@ class ProductVariantPrivateSerializer(serializers.ModelSerializer):
             many=True
         ).data
 
+    # -------------------------
+    # MATCH INFO (FULL DEBUG)
+    # -------------------------
+    def get_match_info(self, obj):
+        request = self.context.get("request")
+
+        # ✅ Only show match_info for filter API
+        if not request or not request.path.endswith("/variations/filter/"):
+            return None
+
+        requested_colors = {
+            c.lower()
+            for c in request.query_params.get("color", "").split(",")
+            if c
+        }
+
+        requested_sizes = {
+            s.lower()
+            for s in request.query_params.get("size", "").split(",")
+            if s
+        }
 
 
+        # No filters → still useful for filter API
+        if not requested_colors and not requested_sizes:
+            return {
+                "matched": True,
+                "color_matched": True,
+                "size_matched": True,
+                "summary": "🎯 No filters – showing all variants",
+            }
+
+        variant_colors = {
+            opt.value.lower()
+            for opt in obj.options.all()
+            if opt.key == "color"
+        }
+
+        variant_sizes = {
+            opt.value.lower()
+            for opt in obj.options.all()
+            if opt.key == "size"
+        }
+
+
+        color_matched = bool(variant_colors & requested_colors) if requested_colors else False
+        size_matched = bool(variant_sizes & requested_sizes) if requested_sizes else False
+
+        matched = (
+            (not requested_colors or color_matched)
+            and
+            (not requested_sizes or size_matched)
+        )
+
+
+        if color_matched and not size_matched:
+            summary = "⚠️ Color matched but size not available"
+        elif size_matched and not color_matched:
+            summary = "⚠️ Size matched but color not available"
+        elif color_matched and size_matched:
+            summary = "🎯 Perfect match"
+        else:
+            summary = "❌ No match"
+
+        return {
+            "matched": matched,
+            "color_matched": color_matched,
+            "size_matched": size_matched,
+            "summary": summary,
+        }
 
 class ProductVariantSerializer(serializers.ModelSerializer):
     options = ProductVariantOptionSerializer(many=True, read_only=True)
@@ -453,8 +549,6 @@ class ProductVariantSerializer(serializers.ModelSerializer):
             ),
             many=True
         ).data
-
-
 
 class ProductVariantCreateSerializer(serializers.Serializer):
     """
@@ -525,79 +619,79 @@ class ProductVariantCreateSerializer(serializers.Serializer):
 # -----------------------------
 # Product
 # -----------------------------
-from django.db.models import Sum
-from rest_framework import serializers
 
 class ProductSerializer(serializers.ModelSerializer):
+    category = ProductCategoryNestedSerializer(read_only=True)
+    category_id = serializers.UUIDField(write_only=True, required=False)
+
+    brand = BrandNestedSerializer(read_only=True)
+    brand_id = serializers.UUIDField(write_only=True, required=False)
+
+    variants = ProductVariantItemSerializer(
+        many=True,
+        write_only=True,
+        required=False
+    )
+
     total_quantity = serializers.SerializerMethodField()
     is_low_stock = serializers.SerializerMethodField()
     low_stock_variants = serializers.SerializerMethodField()
-    primary_category = ProductCategoryNestedSerializer(read_only=True)
-    brand = BrandNestedSerializer(read_only=True)
-
-    # Nested variants for creation
-    variants = ProductVariantItemSerializer(many=True, write_only=True, required=False)
 
     class Meta:
         model = Product
         fields = (
-            "id", "name", "slug", "description", "short_description", "is_active",
-            "is_adult", "avg_rating", "review_count", "created_at", "updated_at",
-            "store", "primary_category", "brand",
-            "total_quantity", "is_low_stock", "low_stock_variants",
+            "id", "name", "slug", "description", "short_description",
+            "is_active", "is_adult", "avg_rating", "review_count",
+            "created_at", "updated_at", "store",
+            "brand", "brand_id",
+            "category", "category_id",
             "variants",
+            "total_quantity", "is_low_stock", "low_stock_variants"
         )
         read_only_fields = ("store", "slug", "created_at", "updated_at")
 
-    def get_total_quantity(self, obj):
-        total = obj.variants.aggregate(total_qty=Sum("quantity"))["total_qty"]
-        return total or 0
-
-    def get_is_low_stock(self, obj):
-        return obj.variants.filter(quantity__lte=20).exists()
-
-    def get_low_stock_variants(self, obj):
-        low_variants = obj.variants.filter(quantity__lte=20)
-        return [
-            {
-                "variant_id": variant.id,
-                "quantity": variant.quantity,
-                "options": {opt.key: opt.value for opt in variant.options.all()},
-            }
-            for variant in low_variants
-        ]
 
     def create(self, validated_data):
-        request = self.context.get("request")
-        variants_data = validated_data.pop("variants", [])
+        request = self.context["request"]
 
-        # Assign store from request.user
+        variants_data = validated_data.pop("variants", [])
+        category_id = validated_data.pop("category_id")
+        brand_id = validated_data.pop("brand_id", None)
+
         validated_data["store"] = request.user.store
+
+        # Attach category
+        validated_data["category"] = ProductCategory.objects.get(
+            id=category_id,
+            store=request.user.store
+        )
+
+        # Brand
+        if brand_id:
+            validated_data["brand"] = Brand.objects.get(
+                id=brand_id,
+                store=request.user.store
+            )
+
         product = Product.objects.create(**validated_data)
 
-        # Create variants properly
+        # Variants
         for variant_data in variants_data:
-            options_dict = variant_data.pop("options", {})
+            options = variant_data.pop("options", {})
             attachments = variant_data.pop("attachments", [])
-            quantity = variant_data.pop("quantity", 0)
-
 
             variant = ProductVariant.objects.create(
                 product=product,
-                price=variant_data.get("price", 0),
-                quantity=quantity,
-
+                **variant_data
             )
 
-            # ✅ Create ProductVariantOption objects
-            for key, value in options_dict.items():
+            for k, v in options.items():
                 ProductVariantOption.objects.create(
                     variant=variant,
-                    key=key,
-                    value=value
+                    key=k,
+                    value=v
                 )
 
-            # ✅ Save attachments
             for idx, file in enumerate(attachments):
                 Attachment.objects.create(
                     store=product.store,
@@ -609,7 +703,28 @@ class ProductSerializer(serializers.ModelSerializer):
 
         return product
 
+    def get_total_quantity(self, obj):
+        # Sum all quantities of all variants of this product
+        total = obj.variants.aggregate(total=Sum('quantity'))['total']
+        return total or 0
 
+        # -------------------------
+    # Is low stock?
+    # -------------------------
+    def get_is_low_stock(self, obj):
+        total_qty = self.get_total_quantity(obj)
+        return total_qty <= 20  # or whatever threshold you prefer
+
+    # -------------------------
+    # Low stock variants
+    # -------------------------
+    def get_low_stock_variants(self, obj):
+        low_variants = obj.variants.filter(quantity__lte=20)
+        return ProductVariantPrivateSerializer(
+            low_variants,
+            many=True,
+            context=self.context
+        ).data
 
 # -----------------------------
 # Product Detail Type
@@ -657,50 +772,28 @@ class ReviewSerializer(serializers.ModelSerializer):
             entity_id=obj.id
         ).values("id", "file", "file_type")
 
-        
+
 class ReviewCreateSerializer(serializers.Serializer):
     """
     Used for creating a review with optional attachments.
     """
-
     product_id = serializers.UUIDField()
-    variant_id = serializers.UUIDField(required=False)
     rating = serializers.IntegerField(min_value=1, max_value=5)
     title = serializers.CharField(max_length=150)
     review_text = serializers.CharField()
-
     attachments = serializers.ListField(
         child=serializers.FileField(),
         required=False,
         max_length=5
     )
 
-    def validate(self, data):
-        """
-        Ensures user has purchased product before reviewing.
-        """
-
-        user = self.context["request"].user
-
-        # Placeholder for purchase validation
-        has_purchased = True
-        if not has_purchased:
-            raise serializers.ValidationError("Only verified buyers can review")
-
-        return data
-
     def create(self, validated_data):
-        """
-        Creates review and stores attachments.
-        """
-
         request = self.context["request"]
         attachments = validated_data.pop("attachments", [])
 
         review = Review.objects.create(
             user=request.user,
             product_id=validated_data["product_id"],
-            variant_id=validated_data.get("variant_id"),
             rating=validated_data["rating"],
             title=validated_data["title"],
             review_text=validated_data["review_text"]
@@ -716,51 +809,46 @@ class ReviewCreateSerializer(serializers.Serializer):
 
         return review
 
-
-
 # =====================================================
 # Product Import Serializer
 # =====================================================
 
 class ProductImportSerializer(serializers.Serializer):
-    """
-    Used for importing products via JSON or CSV.
-    """
-
     name = serializers.CharField(max_length=255)
     price = serializers.DecimalField(max_digits=10, decimal_places=2)
     is_active = serializers.BooleanField(default=True)
-    category = serializers.CharField(required=False, allow_blank=True)
+    categories = serializers.ListField(
+        child=serializers.CharField(),
+        required=False
+    )
     brand = serializers.CharField(required=False, allow_blank=True)
 
     def create(self, validated_data):
-        """
-        Creates product by mapping category and brand by name.
-        """
-
         request = self.context["request"]
         store = request.user.store
 
-        category_name = validated_data.pop("category", None)
+        category_names = validated_data.pop("categories", [])
         brand_name = validated_data.pop("brand", None)
 
-        category = None
-        if category_name:
-            category = ProductCategory.objects.filter(
-                name=category_name,
-                store=store
-            ).first()
+        product = Product.objects.create(
+            store=store,
+            **validated_data
+        )
 
-        brand = None
         if brand_name:
-            brand = Brand.objects.filter(
+            product.brand = Brand.objects.filter(
                 name=brand_name,
                 store=store
             ).first()
+            product.save()
 
-        return Product.objects.create(
-            store=store,
-            primary_category=category,
-            brand=brand,
-            **validated_data
-        )
+        if category_names:
+            categories = ProductCategory.objects.filter(
+                name__in=category_names,
+                store=store
+            )
+            if categories.exists():
+                product.category = categories.first()
+                product.save()
+
+        return product

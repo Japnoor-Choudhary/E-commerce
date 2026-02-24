@@ -19,7 +19,7 @@ from .models import(
     ProductVariantOption,
     Attachment,
     Brand,
-    Review
+    Review,
 )
 # Import serializers
 from .serializers import *
@@ -27,19 +27,12 @@ from .serializers import *
 from .permissions import HasModelPermission
 import uuid
 from django.db.models import Q
-from rest_framework.permissions import AllowAny
-from django.shortcuts import get_object_or_404
-from .utils import get_descendant_category_ids
 
 # -----------------------------
 # Products
 # -----------------------------
-class ProductCRUDAPI(generics.ListCreateAPIView):
-    """
-    GET  -> List all products of logged-in user's store
-    POST -> Create a new product for user's store (supports nested variants & options)
-    """
 
+class ProductCRUDAPI(generics.ListCreateAPIView):
     serializer_class = ProductSerializer
 
     def get_permissions(self):
@@ -50,26 +43,13 @@ class ProductCRUDAPI(generics.ListCreateAPIView):
     def get_queryset(self):
         qs = Product.objects.filter(is_active=True)
         if self.request.user.is_authenticated:
-            return qs.filter(store=self.request.user.store)
+            qs = qs.filter(store=self.request.user.store)
         return qs
-
-    def perform_create(self, serializer):
-        # Automatically assign the store from the logged-in user
-        serializer.save(store=self.request.user.store)
 
     def get_serializer_context(self):
         return {"request": self.request}
-
-
 
 class ProductUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
-    """
-    GET    -> Retrieve a single product
-    PUT    -> Update product
-    PATCH  -> Partial update
-    DELETE -> Delete product
-    """
-
     serializer_class = ProductSerializer
 
     def get_permissions(self):
@@ -79,17 +59,12 @@ class ProductUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         qs = Product.objects.filter(is_active=True)
-
         if self.request.user.is_authenticated:
-            return qs.filter(store=self.request.user.store)
-
+            qs = qs.filter(store=self.request.user.store)
         return qs
-
 
     def get_serializer_context(self):
         return {"request": self.request}
-
-
 
 class RelatedProductListAPI(generics.ListAPIView):
     """
@@ -98,17 +73,15 @@ class RelatedProductListAPI(generics.ListAPIView):
     - same subcategories
     - excludes current product
     """
-
     serializer_class = ProductSerializer
     permission_classes = [AllowAny]
 
     def get_queryset(self):
         product_id = self.kwargs["product_id"]
 
-        # Ensure product exists and is active
         try:
             product = Product.objects.select_related(
-                "primary_category", "store"
+                "category", "store"
             ).get(
                 id=product_id,
                 is_active=True
@@ -116,22 +89,16 @@ class RelatedProductListAPI(generics.ListAPIView):
         except Product.DoesNotExist:
             return Product.objects.none()
 
-        # Collect category + subcategories
-        category_ids = [product.primary_category.id]
-        subcategories = product.primary_category.subcategories.all()
-        category_ids += [c.id for c in subcategories]
-
-        # Fetch related products from SAME STORE
-        qs = Product.objects.filter(
-            store=product.store,
-            is_active=True,
-            primary_category__id__in=category_ids
-        ).exclude(id=product.id)
-
-        return qs.order_by("-avg_rating", "-created_at")[:8]
-
-
-
+        return (
+            Product.objects.filter(
+                category=product.category,
+                store=product.store,
+                is_active=True
+            )
+            .exclude(id=product.id)
+            .distinct()
+            .order_by("-avg_rating", "-created_at")[:8]
+        )
 
 # -----------------------------
 # Product Categories
@@ -146,23 +113,15 @@ class CategoryCRUDAPI(generics.ListCreateAPIView):
         return [IsAuthenticated(), HasModelPermission()]
 
     def get_queryset(self):
-        qs = ProductCategory.objects.filter(parent=None)
-
+        qs = ProductCategory.objects.all()
         if self.request.user.is_authenticated:
-            return qs.filter(store=self.request.user.store)
-
+            qs = qs.filter(store=self.request.user.store)
         return qs
 
     def get_serializer_class(self):
-        """
-        Use different serializers for:
-        - POST (create)
-        - GET (response with nested data)
-        """
         if self.request.method == "POST":
             return ProductCategoryCreateSerializer
         return ProductCategoryResponseSerializer
-
 
 class CategoryUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
     parser_classes = [MultiPartParser, FormParser]
@@ -174,32 +133,31 @@ class CategoryUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
 
     def get_queryset(self):
         qs = ProductCategory.objects.all()
-
         if self.request.user.is_authenticated:
             return qs.filter(store=self.request.user.store)
-
         return qs
 
     def get_serializer_class(self):
-        """
-        Update uses update serializer,
-        retrieve uses response serializer.
-        """
         if self.request.method in ["PUT", "PATCH"]:
             return ProductCategoryUpdateSerializer
         return ProductCategoryResponseSerializer
+    
+class CategoryHierarchyAPI(generics.ListAPIView):
+    serializer_class = ProductCategoryNestedSerializer
+    permission_classes = [AllowAny]
 
+    def get_queryset(self):
+        qs = ProductCategory.objects.filter(parent__isnull=True)
 
+        if self.request.user.is_authenticated:
+            qs = qs.filter(store=self.request.user.store)
+
+        return qs
 
 # -----------------------------
 # Product Variants (Single-Shot Creation)
 # -----------------------------
 class ProductVariantListCreateAPI(generics.ListCreateAPIView):
-    """
-    GET  -> Public + private variant listing
-    POST -> Bulk create (auth only)
-    """
-
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
     def get_permissions(self):
@@ -209,28 +167,36 @@ class ProductVariantListCreateAPI(generics.ListCreateAPIView):
 
     def get_queryset(self):
         qs = ProductVariant.objects.all()
-
-        # 🔐 Store owner sees only their store data
         if self.request.user.is_authenticated:
             return qs.filter(product__store=self.request.user.store)
-
-        # 🌍 Public sees all active variants
         return qs
 
     def get_serializer_class(self):
-        # CREATE
         if self.request.method == "POST":
             return ProductVariantCreateSerializer
-
-        # READ
         if self.request.user.is_authenticated:
             return ProductVariantPrivateSerializer
-
         return ProductVariantPublicSerializer
 
     def get_serializer_context(self):
         return {"request": self.request}
 
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        variants = serializer.save()
+
+        return Response(
+            ProductVariantPrivateSerializer(
+                variants,
+                many=True,
+                context={"request": request}
+            ).data,
+            status=status.HTTP_201_CREATED
+        )
 
 class ProductVariantRetrieveUpdateDeleteAPI(
     generics.RetrieveUpdateDestroyAPIView
@@ -268,8 +234,6 @@ class ProductVariantRetrieveUpdateDeleteAPI(
 # -----------------------------
 # Varaiant Options
 # -----------------------------
-
-from rest_framework.permissions import AllowAny, IsAuthenticated
 
 class ProductVariantOptionListAPI(generics.ListAPIView):
     """
@@ -325,17 +289,10 @@ class ProductVariantOptionUpdateDeleteAPI(
 
         return qs
 
-
-
 # -----------------------------
 # Attachments
 # -----------------------------
 class AttachmentCRUDAPI(generics.ListCreateAPIView):
-    """
-    GET  -> Public + private attachment list
-    POST -> Upload attachment (auth only)
-    """
-
     serializer_class = AttachmentSerializer
 
     def get_permissions(self):
@@ -345,12 +302,8 @@ class AttachmentCRUDAPI(generics.ListCreateAPIView):
 
     def get_queryset(self):
         qs = Attachment.objects.all()
-
-        # 🔐 Store owner → only their attachments
         if self.request.user.is_authenticated:
-            return qs.filter(store=self.request.user.store)
-
-        # 🌍 Public → all attachments (read-only)
+            qs = qs.filter(store=self.request.user.store)
         return qs
 
     def perform_create(self, serializer):
@@ -483,15 +436,14 @@ class ProductReviewListAPI(generics.ListAPIView):
     """
     List visible reviews for a product.
     """
-
     serializer_class = ReviewSerializer
-
+    permission_classes = [AllowAny]
     def get_queryset(self):
         return Review.objects.filter(
             product_id=self.kwargs["product_id"],
             is_deleted=False,
             is_hidden=False
-        )
+        ).select_related("user", "product")
 
 
 class ReviewUpdateAPI(generics.UpdateAPIView):
@@ -602,8 +554,6 @@ class BrandRetrieveUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
         # 🌍 Public can retrieve any brand
         return qs
 
-
-
 # =====================================================
 # Product Import / Export
 # =====================================================
@@ -652,15 +602,13 @@ class ProductExportAPI(generics.GenericAPIView):
         for product in products:
             writer.writerow([
                 product.name,
-                product.price,
+                product.variants.first().price if product.variants.exists() else "",
                 product.is_active,
-                product.primary_category.name if product.primary_category else "",
+                ", ".join(product.categories.values_list("name", flat=True)),
                 product.brand.name if product.brand else "",
             ])
 
         return response
-
-
 
 class ProductImportAPI(generics.CreateAPIView):
     """
@@ -717,106 +665,50 @@ class ProductImportAPI(generics.CreateAPIView):
             status=status.HTTP_201_CREATED
         )
 
-
-
 class ProductVariantFilterAPI(generics.ListAPIView):
-    """
-    Fetch product variations with filters:
-    - category
-    - brand
-    - color
-    - price range
-    - rating
-    """
-
     permission_classes = [AllowAny]
+    serializer_class = ProductVariantPublicSerializer
 
     def get_queryset(self):
         qs = ProductVariant.objects.select_related(
-            "product", "product__primary_category"
-        )
+            "product",
+            "product__brand"
+        ).prefetch_related(
+            "options",
+            "product__categories"
+        ).filter(product__is_active=True)
 
-        # -------------------------
-        # Category filter (recursive)
-        # -------------------------
-        category_id = self.request.query_params.get("category_id")
-        if category_id:
-            category_id = category_id.rstrip("/")
+        # CATEGORY filter (OR logic)
+        category_ids = self.request.query_params.get("category")
+        if category_ids:
+            q_cat = Q()
+            for cid in category_ids.split(","):
+                q_cat |= Q(product__categories__id=cid)
+            qs = qs.filter(q_cat)
 
-            try:
-                category_uuid = uuid.UUID(category_id)
-            except (ValueError, TypeError):
-                return qs.none()
+        # BRAND filter (OR logic)
+        brand_ids = self.request.query_params.get("brand")
+        if brand_ids:
+            qs = qs.filter(product__brand_id__in=brand_ids.split(","))
 
-            category = ProductCategory.objects.filter(
-                id=category_uuid
-            ).first()
-
-            if not category:
-                return qs.none()
-
-            category_ids = get_descendant_category_ids(category)
-
-            qs = qs.filter(
-                product__primary_category_id__in=category_ids
-            )
-
-        # -------------------------
-        # Brand filter
-        # -------------------------
-        brand_id = self.request.query_params.get("brand_id")
-        if brand_id:
-            qs = qs.filter(product__brand_id=brand_id)
-
-        # -------------------------
-        # Color filter (variant option)
-        # -------------------------
-        color_ids = self.request.query_params.get("color")  # 👈 match URL
-
-        if color_ids:
-            try:
-                color_uuid_list = [
-                    uuid.UUID(cid.strip())
-                    for cid in color_ids.split(",")
-                ]
-            except ValueError:
-                from rest_framework.exceptions import ValidationError
-                raise ValidationError({"color": "Invalid UUID"})
-
-            qs = qs.filter(
-                options__id__in=color_uuid_list,
-                options__key="color"   # 🔥 VERY IMPORTANT
-            )
-
-        return qs.distinct()
-
-        # -------------------------
-        # Price filter
-        # -------------------------
+        # PRICE
         min_price = self.request.query_params.get("min_price")
         max_price = self.request.query_params.get("max_price")
-
         if min_price:
             qs = qs.filter(price__gte=min_price)
         if max_price:
             qs = qs.filter(price__lte=max_price)
 
-        # -------------------------
-        # Rating filter
-        # -------------------------
-        min_rating = self.request.query_params.get("min_rating")
-        if min_rating:
-            qs = qs.filter(product__avg_rating__gte=min_rating)
+        # VARIANT OPTIONS (size/color) – OR logic, case-insensitive
+        for key in ["color", "size"]:
+            values = self.request.query_params.get(key)
+            if values:
+                q_opt = Q()
+                for v in values.split(","):
+                    q_opt |= Q(options__key__iexact=key, options__value__iexact=v.strip())
+                qs = qs.filter(q_opt)
 
-        return qs.distinct().order_by("-product__avg_rating", "-created_at")
+        return qs.distinct()
 
-    def get_serializer_class(self):
-        # Logged-in store owner
-        if self.request.user.is_authenticated:
-            return ProductVariantPrivateSerializer
 
-        # Public
-        return ProductVariantPublicSerializer
 
-    def get_serializer_context(self):
-        return {"request": self.request}

@@ -39,8 +39,8 @@ class ProductCategoryAdmin(admin.ModelAdmin):
 # =====================================================
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = ('id','name', 'slug', 'store', 'primary_category', 'is_active', 'is_adult', 'created_at')
-    list_filter = ('store', 'is_active', 'is_adult', 'primary_category')
+    list_display = ('id','name', 'slug', 'store',  'is_active', 'is_adult', 'created_at')
+    list_filter = ('store', 'is_active', 'is_adult', )
     search_fields = ('name', 'slug')
     readonly_fields = ('slug', 'created_at', 'updated_at')
     ordering = ('-created_at',)
@@ -96,7 +96,6 @@ class ReviewAdmin(admin.ModelAdmin):
     list_display = (
         'id',
         'product',
-        'variant',
         'user',
         'rating',
         'is_deleted',
@@ -104,7 +103,7 @@ class ReviewAdmin(admin.ModelAdmin):
         'created_at',
     )
     list_filter = ('rating', 'is_deleted', 'is_hidden', 'created_at')
-    search_fields = ('product__name', 'user__email', 'title')
+    search_fields = ('user__email', 'title')
     readonly_fields = ('created_at', 'updated_at')
     ordering = ('-created_at',)
 # =====================================================
@@ -113,5 +112,5 @@ class ReviewAdmin(admin.ModelAdmin):
 @admin.register(ReviewHelpfulVote)
 class ReviewHelpfulVoteAdmin(admin.ModelAdmin):
     list_display = ('id', 'review', 'user')
-    list_filter = ('review__product',)
+    list_filter = ()
     search_fields = ('review__product__name', 'user__email')

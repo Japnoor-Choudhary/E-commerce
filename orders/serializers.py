@@ -8,13 +8,21 @@ from .models import (
     OrderTracking,
     Coupon,
 )
-from products.models import Product
+from products.models import Product,ProductVariant
 
 
 # ---------------------------
 # Cart
 # ---------------------------
 class CartItemSerializer(serializers.ModelSerializer):
+    product = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(),
+        required=False
+    )
+    variation = serializers.PrimaryKeyRelatedField(
+        queryset=ProductVariant.objects.all()
+    )
+
     product_name = serializers.CharField(source="product.name", read_only=True)
     variation_name = serializers.CharField(source="variation.name", read_only=True)
     unit_price = serializers.SerializerMethodField()
@@ -24,6 +32,15 @@ class CartItemSerializer(serializers.ModelSerializer):
         model = CartItem
         exclude = ("user",)
 
+    def validate(self, attrs):
+        variation = attrs.get("variation")
+        
+        # 🚀 Automatically assign product from variation
+        if variation:
+            attrs["product"] = variation.product
+        
+        return attrs
+
     def get_unit_price(self, obj):
         if obj.variation:
             return obj.variation.price
@@ -31,6 +48,7 @@ class CartItemSerializer(serializers.ModelSerializer):
 
     def get_payable_amount(self, obj):
         return self.get_unit_price(obj) * obj.quantity
+
     
 class CartSummarySerializer(serializers.Serializer):
     items = CartItemSerializer(many=True)

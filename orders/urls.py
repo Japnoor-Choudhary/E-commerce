@@ -7,7 +7,7 @@ urlpatterns = [
     # =========================
     path("cart/", CartListCreateAPI.as_view(), name="cart-list-create"),
     path("cart/<uuid:pk>/", CartDeleteAPI.as_view(), name="cart-delete"),
-    
+    path("cart-update/<uuid:pk>/", CartUpdateAPI.as_view(), name="cart-update"),
     
     # =========================
     # Cart Coupons

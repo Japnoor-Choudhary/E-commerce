@@ -18,10 +18,17 @@ class PricingEngine:
             product_prices[item] = price * item.quantity
             applied_discounts[item] = Decimal("0.00")
 
-        coupons = list(
-            Coupon.objects.filter(active=True)
+        coupons = []
+
+        # 1️⃣ Pre-applied coupons
+        pre_applied = Coupon.objects.filter(
+            active=True,
+            is_pre_applied=True
         )
 
+        coupons.extend(pre_applied)
+
+        # 2️⃣ Manually applied coupon
         if user_coupon:
             coupons.append(user_coupon)
 

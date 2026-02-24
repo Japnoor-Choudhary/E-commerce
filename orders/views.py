@@ -61,22 +61,48 @@ class CartListCreateAPI(generics.ListCreateAPIView):
     def get_queryset(self):
         return CartItem.objects.filter(user=self.request.user)
 
-    def post(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data, many=True)
-        serializer.is_valid(raise_exception=True)
+    def list(self, request, *args, **kwargs):
+        user = request.user
 
-        items = []
-        for item in serializer.validated_data:
-            obj, _ = CartItem.objects.update_or_create(
-                user=request.user,
-                product=item["product"],
-                variation=item.get("variation"),
-                defaults={"quantity": item.get("quantity", 1)},
-            )
-            items.append(obj)
+        cart_items = (
+            CartItem.objects
+            .select_related("product", "variation")
+            .filter(user=user)
+        )
 
-        return Response(CartItemSerializer(items, many=True).data, status=status.HTTP_201_CREATED)
+        # ---------------------------
+        # Get applied coupon (manual)
+        # ---------------------------
+        applied_coupon = None
+        try:
+            applied_coupon = user.cart_coupon.coupon
+        except:
+            pass
 
+        # ---------------------------
+        # Get pre-applied coupon (system)
+        # ---------------------------
+        if not applied_coupon:
+            applied_coupon = Coupon.objects.filter(
+                is_pre_applied=True,
+                active=True
+            ).first()
+
+        # ---------------------------
+        # Calculate pricing
+        # ---------------------------
+        pricing = PricingEngine.apply(
+            cart_items=cart_items,
+            user_coupon=applied_coupon
+        )
+
+        return Response({
+            "items": CartItemSerializer(cart_items, many=True).data,
+            "coupon": applied_coupon.code if applied_coupon else None,
+            "subtotal": pricing["subtotal"],
+            "discount": pricing["discount"],
+            "total": pricing["total"],
+        })
 
 class CartDeleteAPI(generics.DestroyAPIView):
     serializer_class = CartItemSerializer
@@ -85,6 +111,12 @@ class CartDeleteAPI(generics.DestroyAPIView):
     def get_queryset(self):
         return CartItem.objects.filter(user=self.request.user)
 
+class CartUpdateAPI(generics.UpdateAPIView):
+    serializer_class = CartItemSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return CartItem.objects.filter(user=self.request.user)
 
 # ---------------------------
 # Cart Coupon APIs

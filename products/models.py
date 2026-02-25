@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError
 from organization.models import Store
 from django.utils import timezone
 from accounts.models import User
+from mptt.models import MPTTModel, TreeForeignKey
+from mptt.managers import TreeManager
 
 # =====================================================
 # Helpers
@@ -103,33 +105,49 @@ class Attachment(models.Model):
 # Product Category
 # =====================================================
 
-class ProductCategory(models.Model):
+class ProductCategory(MPTTModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     name = models.CharField(max_length=100)
     slug = models.SlugField(max_length=120, unique=True, blank=True)
-    store = models.ForeignKey(Store, on_delete=models.CASCADE, related_name="categories")  
-    parent = models.ForeignKey(
+
+    store = models.ForeignKey(
+        Store,
+        on_delete=models.CASCADE,
+        related_name="categories"
+    )
+
+    parent = TreeForeignKey(
         "self",
         null=True,
         blank=True,
         on_delete=models.CASCADE,
-        related_name="subcategories"
+        related_name="children"
     )
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    objects = TreeManager()
+
+    class MPTTMeta:
+        order_insertion_by = ["name"]
 
     class Meta:
         unique_together = ("slug", "store")
 
     def save(self, *args, **kwargs):
         base_slug = slugify(self.name)
-        if not self.slug or (self.slug.split('-')[0] != base_slug):
+        if not self.slug or not self.slug.startswith(base_slug):
             slug = base_slug
             i = 1
-            while ProductCategory.objects.filter(slug=slug).exclude(pk=self.pk).exists():
+            while ProductCategory.objects.filter(
+                slug=slug,
+                store=self.store
+            ).exclude(pk=self.pk).exists():
                 slug = f"{base_slug}-{i}"
                 i += 1
             self.slug = slug
+
         super().save(*args, **kwargs)
 
 # =====================================================

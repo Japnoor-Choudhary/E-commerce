@@ -27,7 +27,8 @@ from .serializers import (
     OrderSerializer,
     WishlistItemBulkCreateSerializer,
     CartApplyCouponSerializer,
-    CouponSerializer
+    CouponSerializer,
+    CartBulkDeleteSerializer
 )
 
 
@@ -60,7 +61,8 @@ class CartListCreateAPI(generics.ListCreateAPIView):
 
     def get_queryset(self):
         return CartItem.objects.filter(user=self.request.user)
-
+    def perform_create(self, serializer):
+        serializer.save(user=self.request.user)
     def list(self, request, *args, **kwargs):
         user = request.user
 
@@ -118,6 +120,29 @@ class CartUpdateAPI(generics.UpdateAPIView):
     def get_queryset(self):
         return CartItem.objects.filter(user=self.request.user)
 
+class CartBulkDeleteAPI(generics.GenericAPIView):
+    serializer_class = CartBulkDeleteSerializer
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        cart_item_ids = serializer.validated_data["cart_item_ids"]
+
+        cart_items = CartItem.objects.filter(
+            id__in=cart_item_ids,
+            user=request.user
+        )
+
+        deleted_count = cart_items.count()
+        cart_items.delete()
+
+        return Response(
+            {"deleted_items": deleted_count},
+            status=status.HTTP_200_OK
+        )
 # ---------------------------
 # Cart Coupon APIs
 # ---------------------------

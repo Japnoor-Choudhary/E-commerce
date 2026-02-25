@@ -147,7 +147,7 @@ class CategoryHierarchyAPI(generics.ListAPIView):
     permission_classes = [AllowAny]
 
     def get_queryset(self):
-        qs = ProductCategory.objects.filter(parent__isnull=True)
+        qs = ProductCategory.objects.root_nodes()
 
         if self.request.user.is_authenticated:
             qs = qs.filter(store=self.request.user.store)

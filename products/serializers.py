@@ -222,7 +222,7 @@ class ProductCategoryNestedSerializer(serializers.ModelSerializer):
         fields = ("id", "name", "slug", "subcategories")
 
     def get_subcategories(self, obj):
-        children = obj.subcategories.all()
+        children = obj.get_children()
         return ProductCategoryNestedSerializer(children, many=True).data
 
 

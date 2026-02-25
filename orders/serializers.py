@@ -61,6 +61,11 @@ class CartApplyCouponSerializer(serializers.Serializer):
     coupon_code = serializers.CharField(max_length=50)
 
 
+class CartBulkDeleteSerializer(serializers.Serializer):
+    cart_item_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_empty=False
+    )
 # ---------------------------
 # Wishlist
 # ---------------------------

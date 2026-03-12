@@ -36,17 +36,32 @@ from .serializers import (
 # Helper functions
 # ---------------------------
 def get_or_create_system_wishlist(user):
-    wishlist, created = Wishlist.objects.get_or_create(
-        user=user,
-        is_system=True,
-        defaults={"name": "Wishlist", "is_primary": True}
+    # A user should have only one system wishlist, but in case duplicates exist
+    # (e.g., legacy data), pick the oldest and normalize the rest.
+    wishlist = (
+        Wishlist.objects.filter(user=user, is_system=True)
+        .order_by("created_at", "id")
+        .first()
     )
-    if created:
-        Wishlist.objects.filter(user=user).exclude(id=wishlist.id).update(is_primary=False)
+    if wishlist:
+        # demote any extra system wishlists to avoid future collisions
+        Wishlist.objects.filter(user=user, is_system=True).exclude(id=wishlist.id).update(is_primary=False)
+        if not wishlist.is_primary:
+            wishlist.is_primary = True
+            wishlist.save(update_fields=["is_primary"])
+        return wishlist
+
+    wishlist = Wishlist.objects.create(
+        user=user,
+        name="Wishlist",
+        is_system=True,
+        is_primary=True
+    )
+    Wishlist.objects.filter(user=user).exclude(id=wishlist.id).update(is_primary=False)
     return wishlist
 
 def get_primary_wishlist(user):
-    primary = Wishlist.objects.filter(user=user, is_primary=True).first()
+    primary = Wishlist.objects.filter(user=user, is_primary=True).order_by("created_at", "id").first()
     if primary:
         return primary
     return get_or_create_system_wishlist(user)
@@ -272,6 +287,33 @@ class WishlistItemDeleteAPI(generics.DestroyAPIView):
 
     def get_queryset(self):
         return WishlistItem.objects.filter(wishlist__user=self.request.user)
+
+    def delete(self, request, *args, **kwargs):
+        """
+        Allow deletion by either wishlist-item id (default) or product id.
+
+        Front-end currently sends the product uuid; in that case we remove the
+        product from all wishlists that belong to the user to avoid 404s like
+        "No WishlistItem matches the given query."
+        """
+        pk = kwargs.get("pk")
+        queryset = self.get_queryset()
+
+        # 1) Try normal delete by wishlist item id
+        instance = queryset.filter(id=pk).first()
+        if instance:
+            self.perform_destroy(instance)
+            return Response(status=status.HTTP_204_NO_CONTENT)
+
+        # 2) Fallback: treat pk as product id and delete all matching entries
+        product_items = queryset.filter(product_id=pk)
+        if not product_items.exists():
+            return Response({"detail": "No WishlistItem matches the given query."},
+                            status=status.HTTP_404_NOT_FOUND)
+
+        # Remove the product from every wishlist owned by the user
+        product_items.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
     def perform_destroy(self, instance):
         product = instance.product

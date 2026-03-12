@@ -512,6 +512,46 @@ class ProductVariantPrivateSerializer(serializers.ModelSerializer):
             "summary": summary,
         }
 
+
+# -----------------------------
+# Product detail with variants
+# -----------------------------
+class ProductDetailWithVariantsSerializer(serializers.ModelSerializer):
+    """
+    Read-only serializer that returns a product plus its variants,
+    variant options, and attachments at both product and variant level.
+    """
+
+    brand = BrandNestedSerializer(read_only=True)
+    category = ProductCategoryNestedSerializer(read_only=True)
+    attachments = serializers.SerializerMethodField()
+    variants = ProductVariantPrivateSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Product
+        fields = (
+            "id",
+            "name",
+            "slug",
+            "description",
+            "short_description",
+            "brand",
+            "category",
+            "attachments",
+            "variants",
+        )
+
+    def get_attachments(self, obj):
+        # Product-level images/files
+        return AttachmentSerializer(
+            Attachment.objects.filter(
+                entity_type="product",
+                entity_id=obj.id,
+                store=obj.store
+            ),
+            many=True
+        ).data
+
 class ProductVariantSerializer(serializers.ModelSerializer):
     options = ProductVariantOptionSerializer(many=True, read_only=True)
     is_low_stock = serializers.SerializerMethodField()
@@ -523,6 +563,7 @@ class ProductVariantSerializer(serializers.ModelSerializer):
         fields = (
             "id",
             "quantity",
+            "product", 
             "mrp",
             "price",
             "is_low_stock",

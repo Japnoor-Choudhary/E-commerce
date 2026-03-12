@@ -7,6 +7,7 @@ urlpatterns = [
     # -----------------------------
     path("products/data/", ProductCRUDAPI.as_view(), name="product-list-create"),
     path("products/data/<uuid:pk>/", ProductUpdateDeleteAPI.as_view(), name="product-detail"),
+    path("products/full/<uuid:pk>/", ProductDetailWithVariantsAPI.as_view(), name="product-detail-with-variants"),
     path("related-product/<uuid:product_id>/",RelatedProductListAPI.as_view(),name="related-products"),
 
     # -----------------------------

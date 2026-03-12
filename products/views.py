@@ -26,7 +26,7 @@ from .serializers import *
 # Custom permission class for model-level permissions
 from .permissions import HasModelPermission
 import uuid
-from django.db.models import Q
+from django.db.models import Q, Prefetch
 
 # -----------------------------
 # Products
@@ -65,6 +65,33 @@ class ProductUpdateDeleteAPI(generics.RetrieveUpdateDestroyAPIView):
 
     def get_serializer_context(self):
         return {"request": self.request}
+
+
+class ProductDetailWithVariantsAPI(generics.RetrieveAPIView):
+    """
+    GET -> Public endpoint to fetch a single product with its variants
+    and variant options using only the product ID.
+    """
+
+    permission_classes = [AllowAny]
+    serializer_class = ProductDetailWithVariantsSerializer
+    lookup_field = "pk"
+
+    def get_queryset(self):
+        qs = Product.objects.filter(is_active=True).select_related(
+            "brand",
+            "category",
+        ).prefetch_related(
+            Prefetch(
+                "variants",
+                queryset=ProductVariant.objects.prefetch_related("options")
+            )
+        )
+
+        if self.request.user.is_authenticated:
+            return qs.filter(store=self.request.user.store)
+
+        return qs
 
 class RelatedProductListAPI(generics.ListAPIView):
     """
